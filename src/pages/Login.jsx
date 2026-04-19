@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { loginUser, registerUser } from '../firebase/services.js';
 
 export default function Login() {
-  const [mode, setMode] = useState('login'); // 'login' | 'register'
+  const [mode, setMode] = useState('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [nombre, setNombre] = useState('');
@@ -50,25 +50,20 @@ export default function Login() {
       <div style={styles.card}>
         <div style={styles.logo}>🎓</div>
         <h1 style={styles.title}>AcademIA</h1>
-        <p style={styles.subtitle}>Plataforma de Evaluación con IA</p>
+        <p style={styles.subtitle}>Sistema Inteligente de Evaluación y Retroalimentación Académica</p>
+        <p style={styles.docente}>Mg. Gilder Cieza Altamirano · Docente Universitario</p>
 
-        {/* Toggle */}
         <div style={styles.toggle}>
-          <button
-            style={{ ...styles.toggleBtn, ...(mode === 'login' ? styles.toggleActive : {}) }}
-            onClick={() => { setMode('login'); reset(); }}
-          >
+          <button style={{ ...styles.toggleBtn, ...(mode === 'login' ? styles.toggleActive : {}) }}
+            onClick={() => { setMode('login'); reset(); }}>
             Iniciar sesión
           </button>
-          <button
-            style={{ ...styles.toggleBtn, ...(mode === 'register' ? styles.toggleActive : {}) }}
-            onClick={() => { setMode('register'); reset(); }}
-          >
+          <button style={{ ...styles.toggleBtn, ...(mode === 'register' ? styles.toggleActive : {}) }}
+            onClick={() => { setMode('register'); reset(); }}>
             Registrarse
           </button>
         </div>
 
-        {/* LOGIN FORM */}
         {mode === 'login' && (
           <form onSubmit={handleLogin} style={styles.form}>
             <div style={styles.field}>
@@ -88,7 +83,6 @@ export default function Login() {
           </form>
         )}
 
-        {/* REGISTER FORM */}
         {mode === 'register' && (
           <form onSubmit={handleRegister} style={styles.form}>
             <div style={styles.field}>
@@ -113,12 +107,8 @@ export default function Login() {
                   { value: 'alumno', icon: '👨‍🎓', label: 'Alumno' },
                   { value: 'docente', icon: '👨‍🏫', label: 'Docente' },
                 ].map(r => (
-                  <button
-                    key={r.value}
-                    type="button"
-                    onClick={() => setRol(r.value)}
-                    style={{ ...styles.rolBtn, ...(rol === r.value ? styles.rolBtnActive : {}) }}
-                  >
+                  <button key={r.value} type="button" onClick={() => setRol(r.value)}
+                    style={{ ...styles.rolBtn, ...(rol === r.value ? styles.rolBtnActive : {}) }}>
                     <span style={{ fontSize: '22px' }}>{r.icon}</span>
                     <span>{r.label}</span>
                   </button>
@@ -130,8 +120,8 @@ export default function Login() {
               {loading ? 'Creando cuenta...' : 'Crear cuenta'}
             </button>
             <p style={styles.hint}>
-              Al registrarte como <strong>{rol}</strong> tendrás acceso a{' '}
-              {rol === 'docente' ? 'el dashboard, rúbricas y evaluaciones.' : 'tu portal de notas y retroalimentación.'}
+              Acceso como <strong>{rol}</strong>:{' '}
+              {rol === 'docente' ? 'dashboard, rúbricas y evaluaciones.' : 'portal de notas y retroalimentación.'}
             </p>
           </form>
         )}
@@ -154,7 +144,8 @@ const styles = {
   },
   logo: { fontSize: '48px', marginBottom: '12px' },
   title: { color: '#fff', fontSize: '32px', fontWeight: '700', margin: '0 0 8px' },
-  subtitle: { color: 'rgba(255,255,255,0.5)', fontSize: '14px', marginBottom: '28px' },
+  subtitle: { color: 'rgba(255,255,255,0.5)', fontSize: '13px', marginBottom: '6px' },
+  docente: { color: 'rgba(255,255,255,0.3)', fontSize: '12px', marginBottom: '24px', fontStyle: 'italic' },
   toggle: {
     display: 'flex', background: 'rgba(255,255,255,0.07)', borderRadius: '12px',
     padding: '4px', marginBottom: '28px',
@@ -162,7 +153,7 @@ const styles = {
   toggleBtn: {
     flex: 1, padding: '10px', borderRadius: '9px', border: 'none',
     background: 'transparent', color: 'rgba(255,255,255,0.5)',
-    fontSize: '14px', fontWeight: '500', cursor: 'pointer', transition: 'all 0.2s',
+    fontSize: '14px', fontWeight: '500', cursor: 'pointer',
   },
   toggleActive: { background: 'rgba(255,255,255,0.12)', color: '#fff', fontWeight: '600' },
   form: { textAlign: 'left' },
@@ -178,11 +169,9 @@ const styles = {
     flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px',
     padding: '14px', borderRadius: '12px', border: '2px solid rgba(255,255,255,0.1)',
     background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.5)',
-    fontSize: '14px', fontWeight: '500', cursor: 'pointer', transition: 'all 0.2s',
+    fontSize: '14px', fontWeight: '500', cursor: 'pointer',
   },
-  rolBtnActive: {
-    border: '2px solid #667eea', background: 'rgba(102,126,234,0.15)', color: '#fff',
-  },
+  rolBtnActive: { border: '2px solid #667eea', background: 'rgba(102,126,234,0.15)', color: '#fff' },
   error: { color: '#ff6b6b', fontSize: '13px', marginBottom: '12px', textAlign: 'center' },
   btn: {
     width: '100%', padding: '16px', borderRadius: '12px',

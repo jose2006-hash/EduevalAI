@@ -2,15 +2,7 @@
 
 const OPENAI_API_KEY = import.meta.env.VITE_OPENAI_API_KEY;
 
-/**
- * Evalúa un trabajo académico contra una rúbrica usando GPT-4o.
- * @param {string} trabajoTexto - Texto del trabajo del alumno
- * @param {object} rubrica - Objeto con criterios y pesos
- * @param {string} curso - Nombre del curso
- * @param {string} tema - Tema evaluado
- * @returns {object} Resultado con notas por criterio, nota final y retroalimentación
- */
-export const evaluarTrabajo = async (trabajoTexto, rubrica, curso, tema) => {
+export const evaluarTrabajo = async (trabajoTexto, rubrica, curso, tema, silaboTexto = '') => {
   const criteriosTexto = rubrica.criterios.map((c, i) =>
     `${i + 1}. ${c.nombre} (peso: ${c.peso}%): ${c.descripcion}
    - Excelente (${c.puntajeMax}pts): ${c.niveles?.excelente || 'Cumple todos los requisitos'}
@@ -19,13 +11,18 @@ export const evaluarTrabajo = async (trabajoTexto, rubrica, curso, tema) => {
    - Insuficiente (${Math.round(c.puntajeMax * 0.25)}pts): ${c.niveles?.insuficiente || 'No cumple'}`
   ).join('\n\n');
 
+  const silaboSeccion = silaboTexto
+    ? `\n=== SÍLABO DEL CURSO (referencia de contenidos y metodología esperada) ===\n${silaboTexto.substring(0, 4000)}\n`
+    : '';
+
   const prompt = `Eres un evaluador académico experto en el curso de ${curso}.
 Debes evaluar el siguiente trabajo sobre "${tema}" usando ESTRICTAMENTE la rúbrica proporcionada.
+${silaboTexto ? 'Considera el sílabo para verificar si el trabajo se alinea con los contenidos y metodología establecidos.' : ''}
 
 === RÚBRICA ===
 ${criteriosTexto}
 Puntaje total máximo: ${rubrica.puntajeTotal || 20} puntos
-
+${silaboSeccion}
 === TRABAJO DEL ALUMNO ===
 ${trabajoTexto}
 
@@ -74,28 +71,15 @@ Evalúa el trabajo criterio por criterio. Responde ÚNICAMENTE en formato JSON c
   }
 
   const data = await response.json();
-  const resultado = JSON.parse(data.choices[0].message.content);
-  return resultado;
+  return JSON.parse(data.choices[0].message.content);
 };
 
-/**
- * Genera un reporte consolidado de toda la clase
- */
 export const generarReporteClase = async (evaluaciones, cursoNombre) => {
   const resumen = evaluaciones.map(e =>
     `- ${e.alumnoNombre}: ${e.notaFinal}/20 (${e.nivelGlobal})`
   ).join('\n');
 
-  const prompt = `Analiza los siguientes resultados de evaluación del curso ${cursoNombre}:
-${resumen}
-
-Genera un análisis del grupo respondiendo en JSON:
-{
-  "promedioClase": número,
-  "distribucion": { "Excelente": número, "Bueno": número, "Regular": número, "Insuficiente": número },
-  "analisisGeneral": "análisis de 2-3 oraciones",
-  "recomendacionesDocente": ["rec1", "rec2", "rec3"]
-}`;
+  const prompt = `Analiza los resultados del curso ${cursoNombre}:\n${resumen}\n\nResponde en JSON:\n{\n  "promedioClase": número,\n  "distribucion": { "Excelente": número, "Bueno": número, "Regular": número, "Insuficiente": número },\n  "analisisGeneral": "análisis de 2-3 oraciones",\n  "recomendacionesDocente": ["rec1", "rec2", "rec3"]\n}`;
 
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
