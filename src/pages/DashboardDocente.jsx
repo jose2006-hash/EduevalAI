@@ -1,7 +1,7 @@
 // src/pages/DashboardDocente.jsx
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bar, Doughnut, Line } from 'react-chartjs-2';
+import { Bar, Doughnut } from 'react-chartjs-2';
 import {
   Chart as ChartJS, CategoryScale, LinearScale, BarElement,
   ArcElement, PointElement, LineElement, Title, Tooltip, Legend
@@ -91,11 +91,12 @@ export default function DashboardDocente() {
         <div style={styles.sidebarLogo}>🎓 AcademIA</div>
         <nav style={styles.nav}>
           {[
-            { id: 'dashboard', icon: '📊', label: 'Dashboard' },
-            { id: 'evaluar', icon: '✏️', label: 'Evaluar Trabajo' },
-            { id: 'rubricas', icon: '📋', label: 'Rúbricas' },
-            { id: 'alumnos', icon: '👥', label: 'Alumnos' },
-            { id: 'reportes', icon: '📈', label: 'Reportes' },
+            { id: 'dashboard',       icon: '📊', label: 'Dashboard' },
+            { id: 'evaluar',         icon: '✏️', label: 'Evaluar Trabajo' },
+            { id: 'rubricas',        icon: '📋', label: 'Rúbricas' },
+            { id: 'gestion-cursos',  icon: '📚', label: 'Cursos' },
+            { id: 'alumnos',         icon: '👥', label: 'Alumnos' },
+            { id: 'reportes',        icon: '📈', label: 'Reportes' },
           ].map(item => (
             <button
               key={item.id}
@@ -116,10 +117,7 @@ export default function DashboardDocente() {
             <h1 style={styles.pageTitle}>Dashboard</h1>
             <p style={styles.pageSubtitle}>Bienvenido, {userData?.nombre || 'Docente'}</p>
           </div>
-          <button
-            style={styles.ctaBtn}
-            onClick={() => navigate('/evaluar')}
-          >
+          <button style={styles.ctaBtn} onClick={() => navigate('/evaluar')}>
             + Nueva Evaluación
           </button>
         </header>
@@ -127,10 +125,10 @@ export default function DashboardDocente() {
         {/* Stats Grid */}
         <div style={styles.statsGrid}>
           {[
-            { label: 'Total Evaluaciones', value: stats.total, icon: '📝', color: '#667eea' },
-            { label: 'Promedio Clase', value: `${stats.promedio}/20`, icon: '⭐', color: '#22c55e' },
-            { label: 'Aprobados', value: stats.aprobados, icon: '✅', color: '#3b82f6' },
-            { label: 'Desaprobados', value: stats.desaprobados, icon: '❌', color: '#ef4444' },
+            { label: 'Total Evaluaciones', value: stats.total,            icon: '📝', color: '#667eea' },
+            { label: 'Promedio Clase',     value: `${stats.promedio}/20`, icon: '⭐', color: '#22c55e' },
+            { label: 'Aprobados',          value: stats.aprobados,        icon: '✅', color: '#3b82f6' },
+            { label: 'Desaprobados',       value: stats.desaprobados,     icon: '❌', color: '#ef4444' },
           ].map((s, i) => (
             <div key={i} style={{ ...styles.statCard, borderTop: `3px solid ${s.color}` }}>
               <div style={styles.statIcon}>{s.icon}</div>
@@ -174,7 +172,7 @@ export default function DashboardDocente() {
                       <span style={{
                         ...styles.badge,
                         background: ev.notaFinal >= 14 ? '#22c55e33' : ev.notaFinal >= 11 ? '#f59e0b33' : '#ef444433',
-                        color: ev.notaFinal >= 14 ? '#22c55e' : ev.notaFinal >= 11 ? '#f59e0b' : '#ef4444',
+                        color:      ev.notaFinal >= 14 ? '#22c55e'   : ev.notaFinal >= 11 ? '#f59e0b'   : '#ef4444',
                       }}>
                         {ev.notaFinal}/20
                       </span>
