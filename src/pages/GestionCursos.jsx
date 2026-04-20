@@ -25,8 +25,9 @@ export default function GestionCursos() {
   const [cursoPendientes, setCursoPendientes] = useState(null);
   const [pendientes, setPendientes] = useState([]);
   const [aprobados, setAprobados] = useState([]);
+  // ✅ FIX 1: único useState con codigo incluido
   const [form, setForm] = useState({
-    nombre: '', seccion: '', descripcion: '', ciclo: '',
+    nombre: '', seccion: '', codigo: '', descripcion: '', ciclo: '',
     silaboTexto: '', silaboNombre: '',
     tiposEvaluacion: TIPOS_DEFAULT,
   });
@@ -85,6 +86,8 @@ export default function GestionCursos() {
   const handleGuardar = async () => {
     if (!form.nombre.trim()) return setMsg('❌ El nombre del curso es obligatorio');
     if (!form.seccion.trim()) return setMsg('❌ La sección es obligatoria');
+    // ✅ FIX 2: validación de código antes de guardar
+    if (!form.codigo.trim()) return setMsg('❌ El código del curso es obligatorio');
     if (totalPeso !== 100) return setMsg(`❌ Los pesos deben sumar 100% (actualmente: ${totalPeso}%)`);
     setGuardando(true);
     setMsg('');
@@ -97,7 +100,8 @@ export default function GestionCursos() {
       setMsg(`✅ Curso "${form.nombre} - Sección ${form.seccion}" creado exitosamente`);
       await cargarCursos();
       setShowForm(false);
-      setForm({ nombre: '', seccion: '', descripcion: '', ciclo: '', silaboTexto: '', silaboNombre: '', tiposEvaluacion: TIPOS_DEFAULT });
+      // ✅ FIX 3: reset incluye codigo: ''
+      setForm({ nombre: '', seccion: '', codigo: '', descripcion: '', ciclo: '', silaboTexto: '', silaboNombre: '', tiposEvaluacion: TIPOS_DEFAULT });
     } catch (err) {
       setMsg('❌ Error: ' + err.message);
     } finally {
@@ -141,9 +145,10 @@ export default function GestionCursos() {
             {c.silaboNombre && (
               <p style={s.silaboTag}>📄 {c.silaboNombre}</p>
             )}
+            {/* ✅ FIX 4: infoBox muestra código */}
             <div style={s.infoBox}>
-              <p style={s.infoLabel}>Los alumnos se unen buscando:</p>
-              <p style={s.infoValue}>"{c.nombre}" · "{c.docenteNombre}" · "Sección {c.seccion}"</p>
+              <p style={s.infoLabel}>Los alumnos ingresan con:</p>
+              <p style={s.infoValue}>Código: <strong style={{ color: '#a78bfa' }}>{c.codigo}</strong> + nombre del profesor</p>
             </div>
             <button style={s.solicitudesBtn} onClick={() => abrirSolicitudes(c)}>
               👥 Ver alumnos y solicitudes
@@ -230,6 +235,7 @@ export default function GestionCursos() {
               <button style={s.closeBtn} onClick={() => setShowForm(false)}>✕</button>
             </div>
 
+            {/* ✅ FIX 5: grid3 con nombre (span 2) + sección */}
             <div style={s.grid3}>
               <div style={{ gridColumn: 'span 2' }}>
                 <label style={s.label}>Nombre del curso *</label>
@@ -238,22 +244,32 @@ export default function GestionCursos() {
               </div>
               <div>
                 <label style={s.label}>Sección *</label>
-                <input style={s.input} placeholder="Ej: A, B, C..."
+                <input style={s.input} placeholder="Ej: A, B, C"
                   value={form.seccion} onChange={e => setForm(f => ({ ...f, seccion: e.target.value.toUpperCase() }))} />
               </div>
             </div>
 
+            {/* ✅ FIX 6: grid2 con código + ciclo (sin duplicado) */}
             <div style={s.grid2}>
+              <div>
+                <label style={s.label}>Código del curso *</label>
+                <input style={s.input} placeholder="Ej: CONT-2024-A (tú lo defines)"
+                  value={form.codigo} onChange={e => setForm(f => ({ ...f, codigo: e.target.value.toUpperCase() }))} />
+                <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px', marginTop: '6px' }}>
+                  Este código lo compartirás con tus alumnos para que puedan encontrarte
+                </p>
+              </div>
               <div>
                 <label style={s.label}>Ciclo / Semestre</label>
                 <input style={s.input} placeholder="Ej: 2024-II"
                   value={form.ciclo} onChange={e => setForm(f => ({ ...f, ciclo: e.target.value }))} />
               </div>
-              <div>
-                <label style={s.label}>Descripción</label>
-                <input style={s.input} placeholder="Descripción breve"
-                  value={form.descripcion} onChange={e => setForm(f => ({ ...f, descripcion: e.target.value }))} />
-              </div>
+            </div>
+
+            <div style={{ marginBottom: '16px' }}>
+              <label style={s.label}>Descripción</label>
+              <input style={s.input} placeholder="Descripción breve"
+                value={form.descripcion} onChange={e => setForm(f => ({ ...f, descripcion: e.target.value }))} />
             </div>
 
             <div style={s.silaboBox}>

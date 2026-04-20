@@ -1,4 +1,9 @@
 // src/firebase/services.js
+export const getCursoByCodigo = async (codigo) => {
+  const q = query(collection(db, 'cursos'), where('codigo', '==', codigo.toUpperCase()));
+  const snap = await getDocs(q);
+  return snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
+};
 import {
   collection, doc, addDoc, getDoc, getDocs,
   updateDoc, query, where, orderBy, serverTimestamp
