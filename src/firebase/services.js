@@ -1,9 +1,4 @@
 // src/firebase/services.js
-export const getCursoByCodigo = async (codigo) => {
-  const q = query(collection(db, 'cursos'), where('codigo', '==', codigo.toUpperCase()));
-  const snap = await getDocs(q);
-  return snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
-};
 import {
   collection, doc, addDoc, getDoc, getDocs,
   updateDoc, query, where, orderBy, serverTimestamp
@@ -69,7 +64,14 @@ export const getCursosByDocente = async (docenteUid) => {
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 };
 
-// Buscar cursos por nombre + docente + sección (búsqueda flexible)
+// ✅ FIX: movida aquí, después de los imports (antes estaba encima del archivo)
+export const getCursoByCodigo = async (codigo) => {
+  const q = query(collection(db, 'cursos'), where('codigo', '==', codigo.toUpperCase()));
+  const snap = await getDocs(q);
+  return snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
+};
+
+// Buscar cursos por código + nombre docente (búsqueda flexible)
 export const buscarCursos = async ({ nombre, docenteNombre, seccion }) => {
   const snap = await getDocs(collection(db, 'cursos'));
   const todos = snap.docs.map(d => ({ id: d.id, ...d.data() }));
