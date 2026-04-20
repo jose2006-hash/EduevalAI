@@ -1,17 +1,17 @@
 // src/pages/CursoAlumno.jsx
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
-  getCurso, getEntregasByAlumnoYCurso, crearEntrega, calcularNotaFinal
+  getCurso, getEntregasByAlumnoYCurso, crearEntrega, calcularNotaFinal, getRubricas
 } from '../firebase/services.js';
 import { evaluarTrabajo } from '../openai/evaluador.js';
-import { getRubricas } from '../firebase/services.js';
 import { useAuth } from '../components/AuthContext.jsx';
 
 export default function CursoAlumno() {
   const { cursoId } = useParams();
   const { user, userData } = useAuth();
   const navigate = useNavigate();
+  const dropRef = useRef(null);
 
   const [curso, setCurso] = useState(null);
   const [entregas, setEntregas] = useState([]);
@@ -19,23 +19,18 @@ export default function CursoAlumno() {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [entregaSeleccionada, setEntregaSeleccionada] = useState(null);
+  const [dragging, setDragging] = useState(false);
 
-  const [form, setForm] = useState({
-    tipoEvaluacion: '',
-    titulo: '',
-    texto: '',
-    rubricaId: '',
-  });
-  const [pdfNombre, setPdfNombre] = useState('');
-  const [pdfTexto, setPdfTexto] = useState('');
-  const [leyendoPDF, setLeyendoPDF] = useState(false);
+  const [form, setForm] = useState({ tipoEvaluacion: '', titulo: '', texto: '', rubricaId: '' });
+  const [archivo, setArchivo] = useState(null);
+  const [archivoTexto, setArchivoTexto] = useState('');
+  const [leyendo, setLeyendo] = useState(false);
   const [enviando, setEnviando] = useState(false);
   const [error, setError] = useState('');
   const [msg, setMsg] = useState('');
+  const [tabActivo, setTabActivo] = useState('pdf'); // 'pdf' | 'texto'
 
-  useEffect(() => {
-    cargar();
-  }, [cursoId, user]);
+  useEffect(() => { cargar(); }, [cursoId, user]);
 
   const cargar = async () => {
     const [c, ents, rubs] = await Promise.all([
@@ -49,43 +44,61 @@ export default function CursoAlumno() {
     setLoading(false);
   };
 
-  const handlePDF = (e) => {
-    const file = e.target.files[0];
+  const leerPDF = (file) => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const text = ev.target.result
+          .replace(/[^\x20-\x7E\xA0-\xFF\n]/g, ' ')
+          .replace(/\s{3,}/g, '\n')
+          .substring(0, 8000);
+        resolve(text);
+      };
+      reader.readAsText(file, 'latin1');
+    });
+  };
+
+  const procesarArchivo = async (file) => {
     if (!file) return;
-    setPdfNombre(file.name);
-    setLeyendoPDF(true);
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const raw = ev.target.result;
-      const text = raw.replace(/[^\x20-\x7E\xA0-\xFF\n]/g, ' ')
-        .replace(/\s{3,}/g, '\n').substring(0, 8000);
-      setPdfTexto(text);
-      setLeyendoPDF(false);
-    };
-    reader.readAsText(file, 'latin1');
+    if (file.type !== 'application/pdf') {
+      setError('Solo se aceptan archivos PDF');
+      return;
+    }
+    setLeyendo(true);
+    setError('');
+    const texto = await leerPDF(file);
+    setArchivo(file);
+    setArchivoTexto(texto);
+    setTabActivo('pdf');
+    setLeyendo(false);
+  };
+
+  // Drag & Drop handlers
+  const handleDragOver = (e) => { e.preventDefault(); setDragging(true); };
+  const handleDragLeave = () => setDragging(false);
+  const handleDrop = async (e) => {
+    e.preventDefault();
+    setDragging(false);
+    const file = e.dataTransfer.files[0];
+    await procesarArchivo(file);
+  };
+  const handleFileInput = async (e) => {
+    await procesarArchivo(e.target.files[0]);
   };
 
   const handleEnviar = async () => {
-    const textoFinal = pdfTexto || form.texto;
-    if (!textoFinal.trim()) return setError('Escribe o sube tu trabajo');
+    const textoFinal = tabActivo === 'pdf' ? archivoTexto : form.texto;
+    if (!textoFinal?.trim()) return setError('Sube un PDF o escribe el contenido de tu trabajo');
     if (!form.tipoEvaluacion) return setError('Selecciona el tipo de evaluación');
-    if (!form.titulo.trim()) return setError('Ingresa un título');
+    if (!form.titulo.trim()) return setError('Ingresa un título para tu trabajo');
 
-    setError('');
-    setEnviando(true);
-    setMsg('');
-
+    setError(''); setEnviando(true); setMsg('');
     try {
       const rubrica = rubricas.find(r => r.id === form.rubricaId) || rubricas[0];
-
       let resultado = null;
       if (rubrica) {
         resultado = await evaluarTrabajo(
-          textoFinal,
-          rubrica,
-          curso.nombre,
-          form.titulo,
-          curso.silaboTexto || ''
+          textoFinal, rubrica, curso.nombre, form.titulo, curso.silaboTexto || ''
         );
       }
 
@@ -97,19 +110,19 @@ export default function CursoAlumno() {
         tipoEvaluacion: form.tipoEvaluacion,
         titulo: form.titulo,
         texto: textoFinal,
-        pdfNombre: pdfNombre || null,
+        archivoNombre: archivo?.name || null,
         rubricaId: rubrica?.id || null,
         rubricaNombre: rubrica?.nombre || null,
         estado: resultado ? 'evaluado' : 'pendiente',
         ...(resultado || {}),
       });
 
-      setMsg('✅ Trabajo enviado y evaluado con éxito');
+      setMsg('✅ Trabajo enviado y evaluado correctamente');
       setShowForm(false);
       resetForm();
       await cargar();
     } catch (err) {
-      setError('Error: ' + err.message);
+      setError('Error al evaluar: ' + err.message);
     } finally {
       setEnviando(false);
     }
@@ -117,7 +130,7 @@ export default function CursoAlumno() {
 
   const resetForm = () => {
     setForm({ tipoEvaluacion: '', titulo: '', texto: '', rubricaId: '' });
-    setPdfNombre(''); setPdfTexto(''); setError('');
+    setArchivo(null); setArchivoTexto(''); setError(''); setTabActivo('pdf');
   };
 
   const nivelColor = (nota) => {
@@ -135,8 +148,6 @@ export default function CursoAlumno() {
   );
 
   const notaFinal = calcularNotaFinal(entregas, curso?.tiposEvaluacion || []);
-
-  // Agrupar entregas por tipo
   const entregasPorTipo = {};
   curso?.tiposEvaluacion?.forEach(t => {
     entregasPorTipo[t.nombre] = entregas.filter(e => e.tipoEvaluacion === t.nombre);
@@ -148,25 +159,24 @@ export default function CursoAlumno() {
         <button onClick={() => navigate('/mis-cursos')} style={s.backBtn}>← Mis Cursos</button>
         <div style={{ flex: 1 }}>
           <h1 style={s.title}>{curso?.nombre}</h1>
-          <p style={s.subtitle}>{curso?.docenteNombre} · {curso?.ciclo}</p>
+          <p style={s.subtitle}>{curso?.docenteNombre} · Sección {curso?.seccion} · {curso?.ciclo}</p>
         </div>
         <div style={{ textAlign: 'right' }}>
-          <p style={s.notaLabel}>Nota final</p>
+          <p style={s.notaLabel}>Nota final ponderada</p>
           <p style={{ ...s.notaValue, color: nivelColor(notaFinal) }}>
             {notaFinal !== null ? `${notaFinal}/20` : '—'}
           </p>
         </div>
       </header>
 
-      {msg && <p style={s.successMsg}>{msg}</p>}
+      {msg && <div style={s.successMsg}>{msg}</div>}
 
-      {/* Pesos del curso */}
+      {/* Pesos por tipo */}
       <div style={s.pesosRow}>
         {curso?.tiposEvaluacion?.map((t, i) => {
-          const ents = entregasPorTipo[t.nombre] || [];
-          const evaluados = ents.filter(e => e.estado === 'evaluado');
-          const prom = evaluados.length
-            ? (evaluados.reduce((sum, e) => sum + (e.notaFinal || 0), 0) / evaluados.length).toFixed(1)
+          const ents = (entregasPorTipo[t.nombre] || []).filter(e => e.estado === 'evaluado');
+          const prom = ents.length
+            ? (ents.reduce((sum, e) => sum + (e.notaFinal || 0), 0) / ents.length).toFixed(1)
             : null;
           return (
             <div key={i} style={s.pesoCard}>
@@ -175,17 +185,14 @@ export default function CursoAlumno() {
               <p style={{ ...s.pesoNota, color: nivelColor(prom) }}>
                 {prom ? `${prom}/20` : '—'}
               </p>
-              <p style={s.pesoCount}>{evaluados.length} entrega{evaluados.length !== 1 ? 's' : ''}</p>
+              <p style={s.pesoCount}>{ents.length} entrega{ents.length !== 1 ? 's' : ''}</p>
             </div>
           );
         })}
       </div>
 
-      {/* Botón nueva entrega */}
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '20px' }}>
-        <button style={s.primaryBtn} onClick={() => setShowForm(true)}>
-          + Subir trabajo
-        </button>
+        <button style={s.primaryBtn} onClick={() => setShowForm(true)}>+ Subir trabajo</button>
       </div>
 
       {/* Entregas por tipo */}
@@ -196,9 +203,10 @@ export default function CursoAlumno() {
             <h3 style={s.tipoTitle}>
               {tipo.nombre}
               <span style={s.tipoPeso}>{tipo.peso}%</span>
+              <span style={s.tipoCount}>{ents.length} entrega{ents.length !== 1 ? 's' : ''}</span>
             </h3>
             {ents.length === 0 ? (
-              <p style={s.emptyTipo}>Sin entregas aún en esta categoría</p>
+              <p style={s.emptyTipo}>Sin entregas en esta categoría aún</p>
             ) : (
               <div style={s.entregasGrid}>
                 {ents.map((e, i) => (
@@ -213,15 +221,12 @@ export default function CursoAlumno() {
                         {e.estado === 'evaluado' ? `${e.notaFinal}/20` : '⏳ Pendiente'}
                       </span>
                     </div>
-                    {e.nivelGlobal && (
-                      <p style={s.entregaNivel}>{e.nivelGlobal}</p>
-                    )}
+                    {e.archivoNombre && <p style={s.archivoTag}>📄 {e.archivoNombre}</p>}
+                    {e.nivelGlobal && <p style={s.entregaNivel}>{e.nivelGlobal}</p>}
                     <p style={s.entregaFecha}>
                       {e.creadoEn?.toDate?.()?.toLocaleDateString('es-PE') || '—'}
                     </p>
-                    {e.estado === 'evaluado' && (
-                      <p style={s.verDetalle}>Ver retroalimentación →</p>
-                    )}
+                    {e.estado === 'evaluado' && <p style={s.verDetalle}>Ver retroalimentación →</p>}
                   </div>
                 ))}
               </div>
@@ -254,47 +259,83 @@ export default function CursoAlumno() {
                 <label style={s.label}>Rúbrica de evaluación</label>
                 <select style={s.select} value={form.rubricaId}
                   onChange={e => setForm(f => ({ ...f, rubricaId: e.target.value }))}>
-                  <option value="">
-                    {rubricas.length === 0 ? 'Sin rúbricas en este curso' : 'Seleccionar rúbrica...'}
-                  </option>
-                  {rubricas.map(r => (
-                    <option key={r.id} value={r.id}>{r.nombre}</option>
-                  ))}
+                  <option value="">{rubricas.length === 0 ? 'Sin rúbricas asignadas' : 'Seleccionar rúbrica...'}</option>
+                  {rubricas.map(r => <option key={r.id} value={r.id}>{r.nombre}</option>)}
                 </select>
               </div>
             </div>
 
             <div style={{ marginBottom: '16px' }}>
               <label style={s.label}>Título del trabajo *</label>
-              <input style={s.input} placeholder="Ej: Tarea 1 - Introducción a la contabilidad"
-                value={form.titulo} onChange={e => setForm(f => ({ ...f, titulo: e.target.value }))} />
+              <input style={s.input}
+                placeholder="Ej: Tarea 1 - Introducción a la contabilidad"
+                value={form.titulo}
+                onChange={e => setForm(f => ({ ...f, titulo: e.target.value }))} />
             </div>
 
-            {/* Tabs texto/PDF */}
+            {/* Tabs PDF / Texto */}
             <div style={s.tabs}>
-              <span style={s.tabLabel}>Tu trabajo:</span>
-              <label style={s.uploadPdfBtn}>
-                {leyendoPDF ? '⏳ Leyendo PDF...' : pdfNombre ? `✅ ${pdfNombre}` : '📎 Subir PDF'}
-                <input type="file" accept=".pdf" style={{ display: 'none' }} onChange={handlePDF} />
-              </label>
-              <span style={s.tabOr}>o escribe abajo</span>
+              <button
+                style={{ ...s.tab, ...(tabActivo === 'pdf' ? s.tabActivo : {}) }}
+                onClick={() => setTabActivo('pdf')}>
+                📄 Subir PDF
+              </button>
+              <button
+                style={{ ...s.tab, ...(tabActivo === 'texto' ? s.tabActivo : {}) }}
+                onClick={() => setTabActivo('texto')}>
+                ✏️ Escribir texto
+              </button>
             </div>
 
-            <textarea
-              style={s.textarea}
-              placeholder="Pega o escribe el contenido de tu trabajo aquí..."
-              value={form.texto}
-              onChange={e => setForm(f => ({ ...f, texto: e.target.value }))}
-              rows={10}
-              disabled={!!pdfTexto}
-            />
-            {pdfTexto && (
-              <div style={s.pdfLoaded}>
-                <span>📄 PDF cargado correctamente</span>
-                <button style={s.clearPdf} onClick={() => { setPdfNombre(''); setPdfTexto(''); }}>
-                  Quitar PDF
-                </button>
+            {/* Drop zone PDF */}
+            {tabActivo === 'pdf' && (
+              <div
+                ref={dropRef}
+                style={{ ...s.dropZone, ...(dragging ? s.dropZoneActive : {}), ...(archivo ? s.dropZoneDone : {}) }}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+              >
+                {leyendo ? (
+                  <div style={s.dropContent}>
+                    <div style={s.spinner} />
+                    <p style={s.dropText}>Leyendo archivo...</p>
+                  </div>
+                ) : archivo ? (
+                  <div style={s.dropContent}>
+                    <span style={{ fontSize: '40px' }}>✅</span>
+                    <p style={{ ...s.dropText, color: '#22c55e' }}>{archivo.name}</p>
+                    <p style={s.dropHint}>Archivo listo para evaluar</p>
+                    <button style={s.clearBtn}
+                      onClick={() => { setArchivo(null); setArchivoTexto(''); }}>
+                      Quitar archivo
+                    </button>
+                  </div>
+                ) : (
+                  <div style={s.dropContent}>
+                    <span style={{ fontSize: '48px' }}>{dragging ? '📂' : '📄'}</span>
+                    <p style={s.dropText}>
+                      {dragging ? 'Suelta el archivo aquí' : 'Arrastra tu PDF aquí'}
+                    </p>
+                    <p style={s.dropHint}>o haz clic para seleccionar</p>
+                    <label style={s.selectFileBtn}>
+                      Seleccionar PDF
+                      <input type="file" accept=".pdf" style={{ display: 'none' }} onChange={handleFileInput} />
+                    </label>
+                  </div>
+                )}
               </div>
+            )}
+
+            {/* Textarea texto */}
+            {tabActivo === 'texto' && (
+              <textarea
+                style={s.textarea}
+                placeholder="Escribe o pega el contenido de tu trabajo aquí..."
+                value={form.texto}
+                onChange={e => setForm(f => ({ ...f, texto: e.target.value }))}
+                rows={12}
+              />
             )}
 
             {error && <p style={s.error}>{error}</p>}
@@ -311,7 +352,7 @@ export default function CursoAlumno() {
                 Cancelar
               </button>
               <button style={s.primaryBtn} onClick={handleEnviar} disabled={enviando}>
-                {enviando ? 'Enviando...' : '🚀 Enviar y evaluar'}
+                {enviando ? 'Evaluando...' : '🚀 Enviar y evaluar con IA'}
               </button>
             </div>
           </div>
@@ -323,15 +364,21 @@ export default function CursoAlumno() {
         <div style={s.overlay}>
           <div style={{ ...s.modal, maxWidth: '700px' }}>
             <div style={s.modalHeader}>
-              <h2 style={s.modalTitle}>{entregaSeleccionada.titulo}</h2>
+              <div>
+                <h2 style={s.modalTitle}>{entregaSeleccionada.titulo}</h2>
+                <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '13px', margin: 0 }}>
+                  {entregaSeleccionada.tipoEvaluacion} · {entregaSeleccionada.rubricaNombre}
+                </p>
+              </div>
               <button style={s.closeBtn} onClick={() => setEntregaSeleccionada(null)}>✕</button>
             </div>
 
-            <div style={{ textAlign: 'center', marginBottom: '24px' }}>
-              <div style={{ fontSize: '48px', fontWeight: '800', color: nivelColor(entregaSeleccionada.notaFinal) }}>
-                {entregaSeleccionada.notaFinal}<span style={{ fontSize: '20px', opacity: 0.5 }}>/20</span>
+            <div style={{ textAlign: 'center', padding: '20px 0', borderBottom: '1px solid rgba(255,255,255,0.06)', marginBottom: '20px' }}>
+              <div style={{ fontSize: '56px', fontWeight: '800', color: nivelColor(entregaSeleccionada.notaFinal) }}>
+                {entregaSeleccionada.notaFinal}
+                <span style={{ fontSize: '22px', opacity: 0.5 }}>/20</span>
               </div>
-              <div style={{ color: nivelColor(entregaSeleccionada.notaFinal), fontWeight: '600', fontSize: '16px' }}>
+              <div style={{ color: nivelColor(entregaSeleccionada.notaFinal), fontWeight: '600', fontSize: '18px' }}>
                 {entregaSeleccionada.nivelGlobal}
               </div>
             </div>
@@ -339,35 +386,57 @@ export default function CursoAlumno() {
             {entregaSeleccionada.criterios?.map((c, i) => (
               <div key={i} style={{ marginBottom: '16px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-                  <span style={{ color: '#fff', fontSize: '14px' }}>{c.nombre}</span>
-                  <span style={{ color: nivelColor(c.nivel === 'Excelente' ? 18 : c.nivel === 'Bueno' ? 15 : c.nivel === 'Regular' ? 12 : 8), fontWeight: '600' }}>
+                  <span style={{ color: '#fff', fontSize: '14px', fontWeight: '500' }}>{c.nombre}</span>
+                  <span style={{ color: nivelColor(c.puntajeObtenido / c.puntajeMaximo * 20), fontWeight: '600', fontSize: '14px' }}>
                     {c.puntajeObtenido}/{c.puntajeMaximo} — {c.nivel}
                   </span>
                 </div>
                 <div style={{ height: '6px', background: 'rgba(255,255,255,0.08)', borderRadius: '3px', overflow: 'hidden' }}>
-                  <div style={{ height: '100%', width: `${(c.puntajeObtenido / c.puntajeMaximo) * 100}%`, background: nivelColor(c.nivel === 'Excelente' ? 18 : 12), borderRadius: '3px' }} />
+                  <div style={{
+                    height: '100%',
+                    width: `${(c.puntajeObtenido / c.puntajeMaximo) * 100}%`,
+                    background: nivelColor(c.puntajeObtenido / c.puntajeMaximo * 20),
+                    borderRadius: '3px'
+                  }} />
                 </div>
-                <p style={{ color: 'rgba(255,255,255,0.45)', fontSize: '12px', margin: '4px 0 0' }}>{c.comentario}</p>
+                <p style={{ color: 'rgba(255,255,255,0.45)', fontSize: '12px', margin: '4px 0 0', lineHeight: '1.4' }}>{c.comentario}</p>
               </div>
             ))}
 
             {entregaSeleccionada.retroalimentacionGeneral && (
-              <div style={{ background: 'rgba(102,126,234,0.08)', borderRadius: '12px', padding: '16px', marginTop: '16px' }}>
-                <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '12px', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Retroalimentación</p>
-                <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: '14px', lineHeight: '1.6', margin: 0 }}>
+              <div style={{ background: 'rgba(102,126,234,0.08)', borderRadius: '12px', padding: '16px', margin: '16px 0' }}>
+                <p style={{ color: 'rgba(255,255,255,0.45)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>Retroalimentación</p>
+                <p style={{ color: 'rgba(255,255,255,0.75)', fontSize: '14px', lineHeight: '1.7', margin: 0 }}>
                   {entregaSeleccionada.retroalimentacionGeneral}
                 </p>
               </div>
             )}
 
-            {entregaSeleccionada.recomendaciones?.length > 0 && (
-              <div style={{ marginTop: '16px' }}>
-                <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '12px', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Recomendaciones</p>
-                <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-                  {entregaSeleccionada.recomendaciones.map((r, i) => (
-                    <li key={i} style={{ color: '#a78bfa', fontSize: '14px', marginBottom: '6px' }}>→ {r}</li>
+            <div style={s.grid2}>
+              {entregaSeleccionada.fortalezas?.length > 0 && (
+                <div style={{ background: 'rgba(34,197,94,0.06)', borderRadius: '10px', padding: '14px' }}>
+                  <p style={{ color: '#22c55e', fontSize: '12px', fontWeight: '600', marginBottom: '8px' }}>💪 FORTALEZAS</p>
+                  {entregaSeleccionada.fortalezas.map((f, i) => (
+                    <p key={i} style={{ color: 'rgba(255,255,255,0.6)', fontSize: '13px', margin: '0 0 4px' }}>✓ {f}</p>
                   ))}
-                </ul>
+                </div>
+              )}
+              {entregaSeleccionada.areasDesMejora?.length > 0 && (
+                <div style={{ background: 'rgba(245,158,11,0.06)', borderRadius: '10px', padding: '14px' }}>
+                  <p style={{ color: '#f59e0b', fontSize: '12px', fontWeight: '600', marginBottom: '8px' }}>📈 MEJORAR</p>
+                  {entregaSeleccionada.areasDesMejora.map((a, i) => (
+                    <p key={i} style={{ color: 'rgba(255,255,255,0.6)', fontSize: '13px', margin: '0 0 4px' }}>⚠ {a}</p>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {entregaSeleccionada.recomendaciones?.length > 0 && (
+              <div style={{ marginTop: '12px' }}>
+                <p style={{ color: 'rgba(255,255,255,0.45)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>Recomendaciones</p>
+                {entregaSeleccionada.recomendaciones.map((r, i) => (
+                  <p key={i} style={{ color: '#a78bfa', fontSize: '14px', margin: '0 0 6px' }}>→ {r}</p>
+                ))}
               </div>
             )}
 
@@ -390,11 +459,11 @@ const s = {
   subtitle: { color: 'rgba(255,255,255,0.4)', fontSize: '13px', margin: 0 },
   notaLabel: { color: 'rgba(255,255,255,0.4)', fontSize: '11px', margin: '0 0 2px', textAlign: 'right' },
   notaValue: { fontSize: '32px', fontWeight: '800', margin: 0 },
-  successMsg: { color: '#22c55e', fontSize: '14px', marginBottom: '16px', background: 'rgba(34,197,94,0.1)', padding: '12px 16px', borderRadius: '10px' },
+  successMsg: { color: '#22c55e', fontSize: '14px', marginBottom: '16px', background: 'rgba(34,197,94,0.1)', padding: '12px 16px', borderRadius: '10px', border: '1px solid rgba(34,197,94,0.2)' },
   pesosRow: { display: 'flex', gap: '12px', marginBottom: '24px', flexWrap: 'wrap' },
-  pesoCard: { flex: 1, minWidth: '100px', background: 'rgba(255,255,255,0.04)', borderRadius: '12px', padding: '16px', border: '1px solid rgba(255,255,255,0.08)', textAlign: 'center' },
+  pesoCard: { flex: 1, minWidth: '110px', background: 'rgba(255,255,255,0.04)', borderRadius: '12px', padding: '16px', border: '1px solid rgba(255,255,255,0.08)', textAlign: 'center' },
   pesoNombre: { color: 'rgba(255,255,255,0.6)', fontSize: '12px', margin: '0 0 4px', fontWeight: '500' },
-  pesoPct: { color: '#a78bfa', fontSize: '18px', fontWeight: '700', margin: '0 0 8px' },
+  pesoPct: { color: '#a78bfa', fontSize: '18px', fontWeight: '700', margin: '0 0 6px' },
   pesoNota: { fontSize: '20px', fontWeight: '700', margin: '0 0 4px' },
   pesoCount: { color: 'rgba(255,255,255,0.3)', fontSize: '11px', margin: 0 },
   primaryBtn: { padding: '12px 24px', borderRadius: '12px', background: 'linear-gradient(135deg, #667eea, #764ba2)', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: '600', fontSize: '14px' },
@@ -402,32 +471,44 @@ const s = {
   tipoSection: { marginBottom: '28px' },
   tipoTitle: { color: '#fff', fontSize: '16px', fontWeight: '600', margin: '0 0 12px', display: 'flex', alignItems: 'center', gap: '10px' },
   tipoPeso: { background: 'rgba(167,139,250,0.15)', color: '#a78bfa', padding: '2px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: '500' },
+  tipoCount: { color: 'rgba(255,255,255,0.3)', fontSize: '12px', fontWeight: '400' },
   emptyTipo: { color: 'rgba(255,255,255,0.25)', fontSize: '13px', padding: '16px 0' },
   entregasGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '12px' },
   entregaCard: { background: 'rgba(255,255,255,0.04)', borderRadius: '12px', padding: '16px', border: '1px solid rgba(255,255,255,0.08)', cursor: 'pointer' },
-  entregaTop: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px', gap: '8px' },
+  entregaTop: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px', marginBottom: '6px' },
   entregaTitulo: { color: '#fff', fontSize: '14px', fontWeight: '500', flex: 1 },
   estadoBadge: { padding: '3px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: '700', flexShrink: 0 },
+  archivoTag: { color: 'rgba(255,255,255,0.35)', fontSize: '11px', margin: '0 0 4px' },
   entregaNivel: { color: 'rgba(255,255,255,0.45)', fontSize: '12px', margin: '0 0 4px' },
   entregaFecha: { color: 'rgba(255,255,255,0.3)', fontSize: '11px', margin: 0 },
   verDetalle: { color: '#a78bfa', fontSize: '12px', margin: '8px 0 0', fontWeight: '500' },
-  overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 1000, overflowY: 'auto', padding: '32px' },
+  overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 1000, overflowY: 'auto', padding: '32px' },
   modal: { background: '#1a1535', borderRadius: '20px', padding: '32px', width: '100%', maxWidth: '680px', border: '1px solid rgba(255,255,255,0.1)' },
-  modalHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' },
-  modalTitle: { color: '#fff', fontSize: '18px', fontWeight: '700', margin: 0 },
-  closeBtn: { background: 'rgba(255,255,255,0.08)', border: 'none', color: 'rgba(255,255,255,0.6)', cursor: 'pointer', fontSize: '16px', width: '32px', height: '32px', borderRadius: '8px' },
+  modalHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px' },
+  modalTitle: { color: '#fff', fontSize: '18px', fontWeight: '700', margin: '0 0 4px' },
+  closeBtn: { background: 'rgba(255,255,255,0.08)', border: 'none', color: 'rgba(255,255,255,0.6)', cursor: 'pointer', fontSize: '16px', width: '32px', height: '32px', borderRadius: '8px', flexShrink: 0 },
   grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' },
   label: { display: 'block', color: 'rgba(255,255,255,0.6)', fontSize: '13px', fontWeight: '500', marginBottom: '8px' },
   input: { width: '100%', padding: '11px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.06)', color: '#fff', fontSize: '14px', outline: 'none', boxSizing: 'border-box' },
   select: { width: '100%', padding: '11px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(20,16,50,0.95)', color: '#fff', fontSize: '14px', outline: 'none', boxSizing: 'border-box' },
-  tabs: { display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '10px' },
-  tabLabel: { color: 'rgba(255,255,255,0.5)', fontSize: '13px' },
-  uploadPdfBtn: { display: 'inline-block', padding: '7px 14px', borderRadius: '8px', background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.25)', color: '#22c55e', fontSize: '13px', cursor: 'pointer' },
-  tabOr: { color: 'rgba(255,255,255,0.3)', fontSize: '12px' },
+  tabs: { display: 'flex', background: 'rgba(255,255,255,0.06)', borderRadius: '10px', padding: '4px', marginBottom: '16px', gap: '4px' },
+  tab: { flex: 1, padding: '10px', borderRadius: '8px', border: 'none', background: 'transparent', color: 'rgba(255,255,255,0.5)', fontSize: '14px', fontWeight: '500', cursor: 'pointer' },
+  tabActivo: { background: 'rgba(255,255,255,0.1)', color: '#fff', fontWeight: '600' },
+  dropZone: {
+    border: '2px dashed rgba(102,126,234,0.35)', borderRadius: '16px',
+    padding: '40px 20px', textAlign: 'center', cursor: 'pointer',
+    background: 'rgba(102,126,234,0.04)', marginBottom: '16px',
+    transition: 'all 0.2s',
+  },
+  dropZoneActive: { border: '2px dashed #667eea', background: 'rgba(102,126,234,0.12)' },
+  dropZoneDone: { border: '2px solid rgba(34,197,94,0.4)', background: 'rgba(34,197,94,0.06)' },
+  dropContent: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' },
+  dropText: { color: '#fff', fontSize: '16px', fontWeight: '500', margin: 0 },
+  dropHint: { color: 'rgba(255,255,255,0.4)', fontSize: '13px', margin: 0 },
+  selectFileBtn: { display: 'inline-block', padding: '10px 20px', borderRadius: '10px', background: 'rgba(102,126,234,0.2)', border: '1px solid rgba(102,126,234,0.35)', color: '#a78bfa', fontSize: '14px', cursor: 'pointer', fontWeight: '500' },
+  clearBtn: { background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)', color: '#ef4444', borderRadius: '8px', padding: '6px 14px', cursor: 'pointer', fontSize: '13px' },
   textarea: { width: '100%', padding: '14px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.04)', color: '#fff', fontSize: '14px', outline: 'none', resize: 'vertical', lineHeight: '1.6', fontFamily: 'inherit', boxSizing: 'border-box' },
-  pdfLoaded: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(34,197,94,0.08)', borderRadius: '8px', padding: '10px 14px', marginTop: '8px', color: '#22c55e', fontSize: '13px' },
-  clearPdf: { background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '13px' },
-  error: { color: '#ef4444', fontSize: '13px', marginTop: '12px' },
-  evaluandoMsg: { display: 'flex', alignItems: 'center', gap: '12px', color: '#a78bfa', fontSize: '14px', marginTop: '16px', padding: '14px', background: 'rgba(102,126,234,0.1)', borderRadius: '10px' },
+  error: { color: '#ef4444', fontSize: '13px', marginTop: '10px' },
+  evaluandoMsg: { display: 'flex', alignItems: 'center', gap: '12px', color: '#a78bfa', fontSize: '14px', marginTop: '14px', padding: '14px', background: 'rgba(102,126,234,0.1)', borderRadius: '10px' },
   spinner: { width: '18px', height: '18px', border: '2px solid rgba(167,139,250,0.3)', borderTop: '2px solid #a78bfa', borderRadius: '50%', animation: 'spin 1s linear infinite', flexShrink: 0 },
 };

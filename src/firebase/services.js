@@ -45,22 +45,12 @@ export const getAllAlumnos = async () => {
 
 // ─── CURSOS ──────────────────────────────────────────────────────────────────
 
-const generarCodigo = () => {
-  const letras = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
-  const nums = '0123456789';
-  const p1 = Array.from({length: 4}, () => letras[Math.floor(Math.random()*letras.length)]).join('');
-  const p2 = Array.from({length: 4}, () => nums[Math.floor(Math.random()*nums.length)]).join('');
-  return `${p1}-${p2}`;
-};
-
 export const crearCurso = async (datos) => {
-  const codigo = generarCodigo();
   const ref = await addDoc(collection(db, 'cursos'), {
     ...datos,
-    codigo,
     creadoEn: serverTimestamp(),
   });
-  return { id: ref.id, codigo };
+  return { id: ref.id };
 };
 
 export const getCursos = async () => {
@@ -74,10 +64,16 @@ export const getCursosByDocente = async (docenteUid) => {
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 };
 
-export const getCursoByCodigo = async (codigo) => {
-  const q = query(collection(db, 'cursos'), where('codigo', '==', codigo.toUpperCase()));
-  const snap = await getDocs(q);
-  return snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
+// Buscar cursos por nombre + docente + sección (búsqueda flexible)
+export const buscarCursos = async ({ nombre, docenteNombre, seccion }) => {
+  const snap = await getDocs(collection(db, 'cursos'));
+  const todos = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  return todos.filter(c => {
+    const matchNombre = !nombre || c.nombre?.toLowerCase().includes(nombre.toLowerCase());
+    const matchDocente = !docenteNombre || c.docenteNombre?.toLowerCase().includes(docenteNombre.toLowerCase());
+    const matchSeccion = !seccion || c.seccion?.toLowerCase().includes(seccion.toLowerCase());
+    return matchNombre && matchDocente && matchSeccion;
+  });
 };
 
 export const getCurso = async (id) => {
@@ -91,7 +87,6 @@ export const actualizarCurso = (id, datos) =>
 // ─── MATRÍCULAS ──────────────────────────────────────────────────────────────
 
 export const solicitarMatricula = async (alumnoUid, alumnoNombre, alumnoEmail, cursoId) => {
-  // Verificar si ya existe solicitud
   const q = query(collection(db, 'matriculas'),
     where('alumnoUid', '==', alumnoUid),
     where('cursoId', '==', cursoId));
@@ -104,7 +99,7 @@ export const solicitarMatricula = async (alumnoUid, alumnoNombre, alumnoEmail, c
     alumnoNombre,
     alumnoEmail,
     cursoId,
-    estado: 'pendiente', // pendiente | aprobado | rechazado
+    estado: 'pendiente',
     creadoEn: serverTimestamp(),
   });
   return { id: ref.id, estado: 'pendiente', yaExiste: false };
@@ -117,9 +112,7 @@ export const aprobarMatricula = (matriculaId) =>
   });
 
 export const rechazarMatricula = (matriculaId) =>
-  updateDoc(doc(db, 'matriculas', matriculaId), {
-    estado: 'rechazado',
-  });
+  updateDoc(doc(db, 'matriculas', matriculaId), { estado: 'rechazado' });
 
 export const getMatriculasByAlumno = async (alumnoUid) => {
   const q = query(collection(db, 'matriculas'), where('alumnoUid', '==', alumnoUid));
@@ -164,7 +157,6 @@ export const getRubrica = async (id) => {
 export const crearEntrega = (entrega) =>
   addDoc(collection(db, 'entregas'), {
     ...entrega,
-    estado: 'pendiente',
     creadoEn: serverTimestamp(),
   });
 
@@ -214,7 +206,9 @@ export const calcularNotaFinal = (entregas, tiposEvaluacion) => {
   let notaFinal = 0;
   let pesoUsado = 0;
   for (const tipo of tiposEvaluacion) {
-    const ents = entregas.filter(e => e.tipoEvaluacion === tipo.nombre && e.estado === 'evaluado');
+    const ents = entregas.filter(e =>
+      e.tipoEvaluacion === tipo.nombre && e.estado === 'evaluado'
+    );
     if (ents.length === 0) continue;
     const prom = ents.reduce((s, e) => s + (e.notaFinal || 0), 0) / ents.length;
     notaFinal += prom * (tipo.peso / 100);

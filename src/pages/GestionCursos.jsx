@@ -26,7 +26,7 @@ export default function GestionCursos() {
   const [pendientes, setPendientes] = useState([]);
   const [aprobados, setAprobados] = useState([]);
   const [form, setForm] = useState({
-    nombre: '', descripcion: '', ciclo: '',
+    nombre: '', seccion: '', descripcion: '', ciclo: '',
     silaboTexto: '', silaboNombre: '',
     tiposEvaluacion: TIPOS_DEFAULT,
   });
@@ -49,13 +49,13 @@ export default function GestionCursos() {
     setAprobados(todos.filter(m => m.estado === 'aprobado'));
   };
 
-  const handleAprobar = async (matriculaId) => {
-    await aprobarMatricula(matriculaId);
+  const handleAprobar = async (id) => {
+    await aprobarMatricula(id);
     await abrirSolicitudes(cursoPendientes);
   };
 
-  const handleRechazar = async (matriculaId) => {
-    await rechazarMatricula(matriculaId);
+  const handleRechazar = async (id) => {
+    await rechazarMatricula(id);
     await abrirSolicitudes(cursoPendientes);
   };
 
@@ -84,15 +84,20 @@ export default function GestionCursos() {
 
   const handleGuardar = async () => {
     if (!form.nombre.trim()) return setMsg('❌ El nombre del curso es obligatorio');
+    if (!form.seccion.trim()) return setMsg('❌ La sección es obligatoria');
     if (totalPeso !== 100) return setMsg(`❌ Los pesos deben sumar 100% (actualmente: ${totalPeso}%)`);
     setGuardando(true);
     setMsg('');
     try {
-      const { codigo } = await crearCurso({ ...form, docenteUid: userData.uid, docenteNombre: userData.nombre });
-      setMsg(`✅ Curso creado — Código para alumnos: ${codigo}`);
+      await crearCurso({
+        ...form,
+        docenteUid: userData.uid,
+        docenteNombre: userData.nombre,
+      });
+      setMsg(`✅ Curso "${form.nombre} - Sección ${form.seccion}" creado exitosamente`);
       await cargarCursos();
       setShowForm(false);
-      setForm({ nombre: '', descripcion: '', ciclo: '', silaboTexto: '', silaboNombre: '', tiposEvaluacion: TIPOS_DEFAULT });
+      setForm({ nombre: '', seccion: '', descripcion: '', ciclo: '', silaboTexto: '', silaboNombre: '', tiposEvaluacion: TIPOS_DEFAULT });
     } catch (err) {
       setMsg('❌ Error: ' + err.message);
     } finally {
@@ -108,24 +113,38 @@ export default function GestionCursos() {
         <button style={s.primaryBtn} onClick={() => setShowForm(true)}>+ Nuevo Curso</button>
       </header>
 
-      {msg && <p style={{ color: msg.includes('✅') ? '#22c55e' : '#ef4444', marginBottom: '16px', fontSize: '14px', background: msg.includes('✅') ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)', padding: '12px 16px', borderRadius: '10px' }}>{msg}</p>}
+      {msg && (
+        <div style={{ color: msg.includes('✅') ? '#22c55e' : '#ef4444', marginBottom: '16px', fontSize: '14px', background: msg.includes('✅') ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)', padding: '12px 16px', borderRadius: '10px' }}>
+          {msg}
+        </div>
+      )}
 
       <div style={s.grid}>
         {cursos.map((c, i) => (
           <div key={i} style={s.cursoCard}>
             <div style={s.cursoTop}>
               <span style={s.cursoIcon}>📚</span>
-              <span style={s.codigoBadge}>{c.codigo}</span>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                {c.seccion && <span style={s.seccionBadge}>Sección {c.seccion}</span>}
+              </div>
             </div>
             <h3 style={s.cursoNombre}>{c.nombre}</h3>
-            <p style={s.cursoCiclo}>{c.ciclo}{c.descripcion && ` · ${c.descripcion}`}</p>
+            <p style={s.cursoCiclo}>
+              {c.ciclo && `${c.ciclo} · `}
+              {c.descripcion}
+            </p>
             <div style={s.tiposList}>
               {c.tiposEvaluacion?.map((t, j) => (
                 <span key={j} style={s.tipoTag}>{t.nombre} {t.peso}%</span>
               ))}
             </div>
-            {c.silaboNombre && <p style={s.silaboTag}>📄 {c.silaboNombre}</p>}
-            <p style={s.codigoHint}>Código para alumnos: <strong style={{ color: '#a78bfa', letterSpacing: '0.1em' }}>{c.codigo}</strong></p>
+            {c.silaboNombre && (
+              <p style={s.silaboTag}>📄 {c.silaboNombre}</p>
+            )}
+            <div style={s.infoBox}>
+              <p style={s.infoLabel}>Los alumnos se unen buscando:</p>
+              <p style={s.infoValue}>"{c.nombre}" · "{c.docenteNombre}" · "Sección {c.seccion}"</p>
+            </div>
             <button style={s.solicitudesBtn} onClick={() => abrirSolicitudes(c)}>
               👥 Ver alumnos y solicitudes
             </button>
@@ -145,12 +164,13 @@ export default function GestionCursos() {
             <div style={s.modalHeader}>
               <div>
                 <h2 style={s.modalTitle}>{cursoPendientes.nombre}</h2>
-                <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '13px', margin: 0 }}>Código: {cursoPendientes.codigo}</p>
+                <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '13px', margin: 0 }}>
+                  Sección {cursoPendientes.seccion} · {cursoPendientes.ciclo}
+                </p>
               </div>
               <button style={s.closeBtn} onClick={() => setCursoPendientes(null)}>✕</button>
             </div>
 
-            {/* Pendientes */}
             <div style={s.seccion}>
               <h3 style={s.seccionTitle}>
                 ⏳ Solicitudes pendientes
@@ -158,26 +178,23 @@ export default function GestionCursos() {
               </h3>
               {pendientes.length === 0 ? (
                 <p style={s.emptyText}>Sin solicitudes pendientes</p>
-              ) : (
-                pendientes.map((m, i) => (
-                  <div key={i} style={s.alumnoRow}>
-                    <div style={s.alumnoInfo}>
-                      <span style={s.alumnoAvatar}>👤</span>
-                      <div>
-                        <p style={s.alumnoNombre}>{m.alumnoNombre}</p>
-                        <p style={s.alumnoEmail}>{m.alumnoEmail}</p>
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      <button style={s.aprobarBtn} onClick={() => handleAprobar(m.id)}>✓ Aprobar</button>
-                      <button style={s.rechazarBtn} onClick={() => handleRechazar(m.id)}>✕ Rechazar</button>
+              ) : pendientes.map((m, i) => (
+                <div key={i} style={s.alumnoRow}>
+                  <div style={s.alumnoInfo}>
+                    <span style={s.alumnoAvatar}>👤</span>
+                    <div>
+                      <p style={s.alumnoNombre}>{m.alumnoNombre}</p>
+                      <p style={s.alumnoEmail}>{m.alumnoEmail}</p>
                     </div>
                   </div>
-                ))
-              )}
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button style={s.aprobarBtn} onClick={() => handleAprobar(m.id)}>✓ Aprobar</button>
+                    <button style={s.rechazarBtn} onClick={() => handleRechazar(m.id)}>✕ Rechazar</button>
+                  </div>
+                </div>
+              ))}
             </div>
 
-            {/* Aprobados */}
             <div style={s.seccion}>
               <h3 style={s.seccionTitle}>
                 ✅ Alumnos aprobados
@@ -185,21 +202,21 @@ export default function GestionCursos() {
               </h3>
               {aprobados.length === 0 ? (
                 <p style={s.emptyText}>Sin alumnos aprobados aún</p>
-              ) : (
-                aprobados.map((m, i) => (
-                  <div key={i} style={s.alumnoRowAprobado}>
-                    <span style={s.alumnoAvatar}>👤</span>
-                    <div>
-                      <p style={s.alumnoNombre}>{m.alumnoNombre}</p>
-                      <p style={s.alumnoEmail}>{m.alumnoEmail}</p>
-                    </div>
-                    <span style={{ marginLeft: 'auto', color: '#22c55e', fontSize: '13px' }}>✓ Aprobado</span>
+              ) : aprobados.map((m, i) => (
+                <div key={i} style={s.alumnoRowAprobado}>
+                  <span style={s.alumnoAvatar}>👤</span>
+                  <div>
+                    <p style={s.alumnoNombre}>{m.alumnoNombre}</p>
+                    <p style={s.alumnoEmail}>{m.alumnoEmail}</p>
                   </div>
-                ))
-              )}
+                  <span style={{ marginLeft: 'auto', color: '#22c55e', fontSize: '13px' }}>✓ Aprobado</span>
+                </div>
+              ))}
             </div>
 
-            <button style={{ ...s.primaryBtn, width: '100%' }} onClick={() => setCursoPendientes(null)}>Cerrar</button>
+            <button style={{ ...s.primaryBtn, width: '100%' }} onClick={() => setCursoPendientes(null)}>
+              Cerrar
+            </button>
           </div>
         </div>
       )}
@@ -213,23 +230,30 @@ export default function GestionCursos() {
               <button style={s.closeBtn} onClick={() => setShowForm(false)}>✕</button>
             </div>
 
-            <div style={s.grid2}>
-              <div>
+            <div style={s.grid3}>
+              <div style={{ gridColumn: 'span 2' }}>
                 <label style={s.label}>Nombre del curso *</label>
                 <input style={s.input} placeholder="Ej: Contabilidad General"
                   value={form.nombre} onChange={e => setForm(f => ({ ...f, nombre: e.target.value }))} />
               </div>
               <div>
+                <label style={s.label}>Sección *</label>
+                <input style={s.input} placeholder="Ej: A, B, C..."
+                  value={form.seccion} onChange={e => setForm(f => ({ ...f, seccion: e.target.value.toUpperCase() }))} />
+              </div>
+            </div>
+
+            <div style={s.grid2}>
+              <div>
                 <label style={s.label}>Ciclo / Semestre</label>
                 <input style={s.input} placeholder="Ej: 2024-II"
                   value={form.ciclo} onChange={e => setForm(f => ({ ...f, ciclo: e.target.value }))} />
               </div>
-            </div>
-
-            <div style={{ marginBottom: '16px' }}>
-              <label style={s.label}>Descripción</label>
-              <input style={s.input} placeholder="Descripción breve"
-                value={form.descripcion} onChange={e => setForm(f => ({ ...f, descripcion: e.target.value }))} />
+              <div>
+                <label style={s.label}>Descripción</label>
+                <input style={s.input} placeholder="Descripción breve"
+                  value={form.descripcion} onChange={e => setForm(f => ({ ...f, descripcion: e.target.value }))} />
+              </div>
             </div>
 
             <div style={s.silaboBox}>
@@ -288,18 +312,20 @@ const s = {
   title: { color: '#fff', fontSize: '24px', fontWeight: '700', flex: 1, margin: 0 },
   primaryBtn: { padding: '12px 24px', borderRadius: '12px', background: 'linear-gradient(135deg, #667eea, #764ba2)', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: '600', fontSize: '14px' },
   secondaryBtn: { padding: '12px 24px', borderRadius: '12px', background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.7)', border: '1px solid rgba(255,255,255,0.12)', cursor: 'pointer', fontSize: '14px' },
-  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '16px' },
-  cursoCard: { background: 'rgba(255,255,255,0.04)', borderRadius: '16px', padding: '24px', border: '1px solid rgba(255,255,255,0.08)', display: 'flex', flexDirection: 'column', gap: '8px' },
+  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '16px' },
+  cursoCard: { background: 'rgba(255,255,255,0.04)', borderRadius: '16px', padding: '24px', border: '1px solid rgba(255,255,255,0.08)', display: 'flex', flexDirection: 'column', gap: '10px' },
   cursoTop: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
   cursoIcon: { fontSize: '28px' },
-  codigoBadge: { background: 'rgba(167,139,250,0.15)', color: '#a78bfa', padding: '4px 12px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', letterSpacing: '0.1em' },
+  seccionBadge: { background: 'rgba(167,139,250,0.15)', color: '#a78bfa', padding: '4px 12px', borderRadius: '8px', fontSize: '13px', fontWeight: '700' },
   cursoNombre: { color: '#fff', fontSize: '18px', fontWeight: '600', margin: 0 },
   cursoCiclo: { color: 'rgba(255,255,255,0.4)', fontSize: '13px', margin: 0 },
   tiposList: { display: 'flex', flexWrap: 'wrap', gap: '6px' },
   tipoTag: { background: 'rgba(102,126,234,0.15)', color: '#a78bfa', padding: '3px 10px', borderRadius: '6px', fontSize: '12px' },
   silaboTag: { color: 'rgba(255,255,255,0.4)', fontSize: '12px', margin: 0 },
-  codigoHint: { color: 'rgba(255,255,255,0.35)', fontSize: '12px', margin: 0, background: 'rgba(167,139,250,0.06)', padding: '8px 12px', borderRadius: '8px' },
-  solicitudesBtn: { width: '100%', padding: '10px', borderRadius: '10px', background: 'rgba(102,126,234,0.12)', border: '1px solid rgba(102,126,234,0.2)', color: '#a78bfa', cursor: 'pointer', fontSize: '13px', fontWeight: '500', marginTop: '4px' },
+  infoBox: { background: 'rgba(102,126,234,0.06)', border: '1px solid rgba(102,126,234,0.15)', borderRadius: '10px', padding: '10px 14px' },
+  infoLabel: { color: 'rgba(255,255,255,0.35)', fontSize: '11px', margin: '0 0 4px', textTransform: 'uppercase', letterSpacing: '0.05em' },
+  infoValue: { color: '#a78bfa', fontSize: '12px', margin: 0, fontStyle: 'italic' },
+  solicitudesBtn: { width: '100%', padding: '10px', borderRadius: '10px', background: 'rgba(102,126,234,0.12)', border: '1px solid rgba(102,126,234,0.2)', color: '#a78bfa', cursor: 'pointer', fontSize: '13px', fontWeight: '500' },
   overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 1000, overflowY: 'auto', padding: '32px' },
   modal: { background: '#1a1535', borderRadius: '20px', padding: '32px', width: '100%', maxWidth: '680px', border: '1px solid rgba(255,255,255,0.1)' },
   modalHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px' },
@@ -319,6 +345,7 @@ const s = {
   aprobarBtn: { padding: '8px 16px', borderRadius: '8px', background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', cursor: 'pointer', fontSize: '13px', fontWeight: '600' },
   rechazarBtn: { padding: '8px 16px', borderRadius: '8px', background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)', color: '#ef4444', cursor: 'pointer', fontSize: '13px', fontWeight: '600' },
   grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' },
+  grid3: { display: 'grid', gridTemplateColumns: '1fr 1fr 120px', gap: '16px', marginBottom: '16px' },
   label: { display: 'block', color: 'rgba(255,255,255,0.6)', fontSize: '13px', fontWeight: '500', marginBottom: '8px' },
   input: { width: '100%', padding: '11px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.06)', color: '#fff', fontSize: '14px', outline: 'none', boxSizing: 'border-box' },
   silaboBox: { background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.15)', borderRadius: '12px', padding: '16px', marginBottom: '20px' },
