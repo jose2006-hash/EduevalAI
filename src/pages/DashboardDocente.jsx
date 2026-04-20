@@ -94,7 +94,7 @@ export default function DashboardDocente() {
             { id: 'dashboard',       icon: '📊', label: 'Dashboard' },
             { id: 'evaluar',         icon: '✏️', label: 'Evaluar Trabajo' },
             { id: 'rubricas',        icon: '📋', label: 'Rúbricas' },
-            { id: 'gestion-cursos',  icon: '📚', label: 'Cursos' },
+            { id: 'cursos',          icon: '📚', label: 'Cursos' },
             { id: 'alumnos',         icon: '👥', label: 'Alumnos' },
             { id: 'reportes',        icon: '📈', label: 'Reportes' },
           ].map(item => (
