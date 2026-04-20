@@ -205,3 +205,8 @@ export const calcularNotaFinal = (entregas, tiposEvaluacion) => {
 
   return Math.round(notaFinal * 10) / 10;
 };
+export const getAllAlumnos = async () => {
+  const q = query(collection(db, 'usuarios'), where('rol', '==', 'alumno'));
+  const snap = await getDocs(q);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+};
