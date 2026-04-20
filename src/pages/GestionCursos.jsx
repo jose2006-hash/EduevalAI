@@ -1,7 +1,11 @@
 // src/pages/GestionCursos.jsx
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getCursosByDocente, crearCurso, actualizarCurso } from '../firebase/services.js';
+import {
+  getCursosByDocente, crearCurso,
+  getMatriculasByCurso, getPendientesByCurso,
+  aprobarMatricula, rechazarMatricula
+} from '../firebase/services.js';
 import { useAuth } from '../components/AuthContext.jsx';
 
 const TIPOS_DEFAULT = [
@@ -18,33 +22,51 @@ export default function GestionCursos() {
   const [showForm, setShowForm] = useState(false);
   const [guardando, setGuardando] = useState(false);
   const [msg, setMsg] = useState('');
+  const [cursoPendientes, setCursoPendientes] = useState(null);
+  const [pendientes, setPendientes] = useState([]);
+  const [aprobados, setAprobados] = useState([]);
   const [form, setForm] = useState({
-    nombre: '',
-    descripcion: '',
-    ciclo: '',
-    silaboTexto: '',
-    silaboNombre: '',
+    nombre: '', descripcion: '', ciclo: '',
+    silaboTexto: '', silaboNombre: '',
     tiposEvaluacion: TIPOS_DEFAULT,
   });
   const [leyendoPDF, setLeyendoPDF] = useState(false);
 
-  useEffect(() => {
-    if (userData?.uid) cargarCursos();
-  }, [userData]);
+  useEffect(() => { if (userData?.uid) cargarCursos(); }, [userData]);
 
   const cargarCursos = async () => {
     const crs = await getCursosByDocente(userData.uid);
     setCursos(crs);
   };
 
-  const handleSilaboPDF = async (e) => {
+  const abrirSolicitudes = async (curso) => {
+    setCursoPendientes(curso);
+    const [pends, todos] = await Promise.all([
+      getPendientesByCurso(curso.id),
+      getMatriculasByCurso(curso.id),
+    ]);
+    setPendientes(pends);
+    setAprobados(todos.filter(m => m.estado === 'aprobado'));
+  };
+
+  const handleAprobar = async (matriculaId) => {
+    await aprobarMatricula(matriculaId);
+    await abrirSolicitudes(cursoPendientes);
+  };
+
+  const handleRechazar = async (matriculaId) => {
+    await rechazarMatricula(matriculaId);
+    await abrirSolicitudes(cursoPendientes);
+  };
+
+  const handleSilaboPDF = (e) => {
     const file = e.target.files[0];
     if (!file) return;
     setLeyendoPDF(true);
     const reader = new FileReader();
     reader.onload = (ev) => {
-      const raw = ev.target.result;
-      const text = raw.replace(/[^\x20-\x7E\xA0-\xFF\n]/g, ' ')
+      const text = ev.target.result
+        .replace(/[^\x20-\x7E\xA0-\xFF\n]/g, ' ')
         .replace(/\s{3,}/g, '\n').substring(0, 8000);
       setForm(f => ({ ...f, silaboTexto: text, silaboNombre: file.name }));
       setLeyendoPDF(false);
@@ -58,16 +80,6 @@ export default function GestionCursos() {
     setForm(f => ({ ...f, tiposEvaluacion: tipos }));
   };
 
-  const addTipo = () => setForm(f => ({
-    ...f,
-    tiposEvaluacion: [...f.tiposEvaluacion, { nombre: '', peso: 0 }]
-  }));
-
-  const removeTipo = (i) => setForm(f => ({
-    ...f,
-    tiposEvaluacion: f.tiposEvaluacion.filter((_, idx) => idx !== i)
-  }));
-
   const totalPeso = form.tiposEvaluacion.reduce((s, t) => s + (t.peso || 0), 0);
 
   const handleGuardar = async () => {
@@ -76,27 +88,17 @@ export default function GestionCursos() {
     setGuardando(true);
     setMsg('');
     try {
-      const { id, codigo } = await crearCurso({
-        ...form,
-        docenteUid: userData.uid,
-        docenteNombre: userData.nombre,
-      });
-      setMsg(`✅ Curso creado — Código: ${codigo}`);
+      const { codigo } = await crearCurso({ ...form, docenteUid: userData.uid, docenteNombre: userData.nombre });
+      setMsg(`✅ Curso creado — Código para alumnos: ${codigo}`);
       await cargarCursos();
       setShowForm(false);
-      resetForm();
+      setForm({ nombre: '', descripcion: '', ciclo: '', silaboTexto: '', silaboNombre: '', tiposEvaluacion: TIPOS_DEFAULT });
     } catch (err) {
       setMsg('❌ Error: ' + err.message);
     } finally {
       setGuardando(false);
     }
   };
-
-  const resetForm = () => setForm({
-    nombre: '', descripcion: '', ciclo: '',
-    silaboTexto: '', silaboNombre: '',
-    tiposEvaluacion: TIPOS_DEFAULT,
-  });
 
   return (
     <div style={s.container}>
@@ -106,9 +108,8 @@ export default function GestionCursos() {
         <button style={s.primaryBtn} onClick={() => setShowForm(true)}>+ Nuevo Curso</button>
       </header>
 
-      {msg && <p style={{ color: msg.includes('✅') ? '#22c55e' : '#ef4444', marginBottom: '16px', fontSize: '14px' }}>{msg}</p>}
+      {msg && <p style={{ color: msg.includes('✅') ? '#22c55e' : '#ef4444', marginBottom: '16px', fontSize: '14px', background: msg.includes('✅') ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)', padding: '12px 16px', borderRadius: '10px' }}>{msg}</p>}
 
-      {/* Lista de cursos */}
       <div style={s.grid}>
         {cursos.map((c, i) => (
           <div key={i} style={s.cursoCard}>
@@ -117,24 +118,91 @@ export default function GestionCursos() {
               <span style={s.codigoBadge}>{c.codigo}</span>
             </div>
             <h3 style={s.cursoNombre}>{c.nombre}</h3>
-            <p style={s.cursoCiclo}>{c.ciclo} {c.descripcion && `· ${c.descripcion}`}</p>
+            <p style={s.cursoCiclo}>{c.ciclo}{c.descripcion && ` · ${c.descripcion}`}</p>
             <div style={s.tiposList}>
               {c.tiposEvaluacion?.map((t, j) => (
                 <span key={j} style={s.tipoTag}>{t.nombre} {t.peso}%</span>
               ))}
             </div>
-            <div style={s.cursoFooter}>
-              {c.silaboNombre && <span style={s.silaboTag}>📄 {c.silaboNombre}</span>}
-            </div>
-            <p style={s.codigoHint}>Comparte este código con tus alumnos: <strong style={{ color: '#a78bfa' }}>{c.codigo}</strong></p>
+            {c.silaboNombre && <p style={s.silaboTag}>📄 {c.silaboNombre}</p>}
+            <p style={s.codigoHint}>Código para alumnos: <strong style={{ color: '#a78bfa', letterSpacing: '0.1em' }}>{c.codigo}</strong></p>
+            <button style={s.solicitudesBtn} onClick={() => abrirSolicitudes(c)}>
+              👥 Ver alumnos y solicitudes
+            </button>
           </div>
         ))}
         {cursos.length === 0 && (
           <p style={{ color: 'rgba(255,255,255,0.3)', gridColumn: '1/-1', textAlign: 'center', padding: '48px' }}>
-            Aún no tienes cursos. Crea el primero.
+            No tienes cursos. Crea el primero.
           </p>
         )}
       </div>
+
+      {/* Modal solicitudes */}
+      {cursoPendientes && (
+        <div style={s.overlay}>
+          <div style={s.modal}>
+            <div style={s.modalHeader}>
+              <div>
+                <h2 style={s.modalTitle}>{cursoPendientes.nombre}</h2>
+                <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '13px', margin: 0 }}>Código: {cursoPendientes.codigo}</p>
+              </div>
+              <button style={s.closeBtn} onClick={() => setCursoPendientes(null)}>✕</button>
+            </div>
+
+            {/* Pendientes */}
+            <div style={s.seccion}>
+              <h3 style={s.seccionTitle}>
+                ⏳ Solicitudes pendientes
+                {pendientes.length > 0 && <span style={s.badgeRed}>{pendientes.length}</span>}
+              </h3>
+              {pendientes.length === 0 ? (
+                <p style={s.emptyText}>Sin solicitudes pendientes</p>
+              ) : (
+                pendientes.map((m, i) => (
+                  <div key={i} style={s.alumnoRow}>
+                    <div style={s.alumnoInfo}>
+                      <span style={s.alumnoAvatar}>👤</span>
+                      <div>
+                        <p style={s.alumnoNombre}>{m.alumnoNombre}</p>
+                        <p style={s.alumnoEmail}>{m.alumnoEmail}</p>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button style={s.aprobarBtn} onClick={() => handleAprobar(m.id)}>✓ Aprobar</button>
+                      <button style={s.rechazarBtn} onClick={() => handleRechazar(m.id)}>✕ Rechazar</button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Aprobados */}
+            <div style={s.seccion}>
+              <h3 style={s.seccionTitle}>
+                ✅ Alumnos aprobados
+                {aprobados.length > 0 && <span style={s.badgeGreen}>{aprobados.length}</span>}
+              </h3>
+              {aprobados.length === 0 ? (
+                <p style={s.emptyText}>Sin alumnos aprobados aún</p>
+              ) : (
+                aprobados.map((m, i) => (
+                  <div key={i} style={s.alumnoRowAprobado}>
+                    <span style={s.alumnoAvatar}>👤</span>
+                    <div>
+                      <p style={s.alumnoNombre}>{m.alumnoNombre}</p>
+                      <p style={s.alumnoEmail}>{m.alumnoEmail}</p>
+                    </div>
+                    <span style={{ marginLeft: 'auto', color: '#22c55e', fontSize: '13px' }}>✓ Aprobado</span>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <button style={{ ...s.primaryBtn, width: '100%' }} onClick={() => setCursoPendientes(null)}>Cerrar</button>
+          </div>
+        </div>
+      )}
 
       {/* Modal nuevo curso */}
       {showForm && (
@@ -142,10 +210,9 @@ export default function GestionCursos() {
           <div style={s.modal}>
             <div style={s.modalHeader}>
               <h2 style={s.modalTitle}>Nuevo Curso</h2>
-              <button style={s.closeBtn} onClick={() => { setShowForm(false); resetForm(); }}>✕</button>
+              <button style={s.closeBtn} onClick={() => setShowForm(false)}>✕</button>
             </div>
 
-            {/* Info básica */}
             <div style={s.grid2}>
               <div>
                 <label style={s.label}>Nombre del curso *</label>
@@ -158,15 +225,15 @@ export default function GestionCursos() {
                   value={form.ciclo} onChange={e => setForm(f => ({ ...f, ciclo: e.target.value }))} />
               </div>
             </div>
-            <div style={{ marginBottom: '20px' }}>
+
+            <div style={{ marginBottom: '16px' }}>
               <label style={s.label}>Descripción</label>
-              <input style={s.input} placeholder="Descripción breve del curso"
+              <input style={s.input} placeholder="Descripción breve"
                 value={form.descripcion} onChange={e => setForm(f => ({ ...f, descripcion: e.target.value }))} />
             </div>
 
-            {/* Sílabo */}
             <div style={s.silaboBox}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                 <label style={s.label}>📄 Sílabo del curso</label>
                 <label style={s.uploadBtn}>
                   {leyendoPDF ? '⏳ Leyendo...' : form.silaboNombre ? `✅ ${form.silaboNombre}` : '📎 Subir PDF'}
@@ -174,36 +241,35 @@ export default function GestionCursos() {
                 </label>
               </div>
               <p style={{ color: 'rgba(255,255,255,0.35)', fontSize: '12px', margin: 0 }}>
-                La IA usará el sílabo como referencia al evaluar trabajos de este curso
+                La IA usará el sílabo como referencia al evaluar trabajos
               </p>
             </div>
 
-            {/* Tipos de evaluación */}
             <div style={{ marginBottom: '20px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                 <label style={s.label}>Tipos de Evaluación y Pesos</label>
                 <span style={{ color: totalPeso === 100 ? '#22c55e' : '#ef4444', fontSize: '13px', fontWeight: '600' }}>
-                  Total: {totalPeso}% {totalPeso === 100 ? '✓' : '(debe ser 100%)'}
+                  Total: {totalPeso}% {totalPeso === 100 ? '✓' : '← debe ser 100%'}
                 </span>
               </div>
               {form.tiposEvaluacion.map((t, i) => (
                 <div key={i} style={s.tipoRow}>
                   <input style={{ ...s.input, flex: 2 }} placeholder="Nombre (ej: Tareas)"
                     value={t.nombre} onChange={e => updateTipo(i, 'nombre', e.target.value)} />
-                  <div style={s.pesoInput}>
-                    <input style={{ ...s.input, width: '70px', textAlign: 'center' }}
-                      type="number" min="0" max="100" value={t.peso}
-                      onChange={e => updateTipo(i, 'peso', e.target.value)} />
-                    <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '13px' }}>%</span>
-                  </div>
-                  <button onClick={() => removeTipo(i)} style={s.removeBtn}>✕</button>
+                  <input style={{ ...s.input, width: '70px', textAlign: 'center' }}
+                    type="number" min="0" max="100" value={t.peso}
+                    onChange={e => updateTipo(i, 'peso', e.target.value)} />
+                  <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '13px' }}>%</span>
+                  <button onClick={() => setForm(f => ({ ...f, tiposEvaluacion: f.tiposEvaluacion.filter((_, idx) => idx !== i) }))}
+                    style={s.removeBtn}>✕</button>
                 </div>
               ))}
-              <button onClick={addTipo} style={s.addTipoBtn}>+ Agregar tipo</button>
+              <button onClick={() => setForm(f => ({ ...f, tiposEvaluacion: [...f.tiposEvaluacion, { nombre: '', peso: 0 }] }))}
+                style={s.addTipoBtn}>+ Agregar tipo</button>
             </div>
 
             <div style={{ display: 'flex', gap: '12px' }}>
-              <button style={s.secondaryBtn} onClick={() => { setShowForm(false); resetForm(); }}>Cancelar</button>
+              <button style={s.secondaryBtn} onClick={() => setShowForm(false)}>Cancelar</button>
               <button style={s.primaryBtn} onClick={handleGuardar} disabled={guardando}>
                 {guardando ? 'Creando...' : '🚀 Crear Curso'}
               </button>
@@ -223,29 +289,41 @@ const s = {
   primaryBtn: { padding: '12px 24px', borderRadius: '12px', background: 'linear-gradient(135deg, #667eea, #764ba2)', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: '600', fontSize: '14px' },
   secondaryBtn: { padding: '12px 24px', borderRadius: '12px', background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.7)', border: '1px solid rgba(255,255,255,0.12)', cursor: 'pointer', fontSize: '14px' },
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '16px' },
-  cursoCard: { background: 'rgba(255,255,255,0.04)', borderRadius: '16px', padding: '24px', border: '1px solid rgba(255,255,255,0.08)' },
-  cursoTop: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' },
+  cursoCard: { background: 'rgba(255,255,255,0.04)', borderRadius: '16px', padding: '24px', border: '1px solid rgba(255,255,255,0.08)', display: 'flex', flexDirection: 'column', gap: '8px' },
+  cursoTop: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
   cursoIcon: { fontSize: '28px' },
   codigoBadge: { background: 'rgba(167,139,250,0.15)', color: '#a78bfa', padding: '4px 12px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', letterSpacing: '0.1em' },
-  cursoNombre: { color: '#fff', fontSize: '18px', fontWeight: '600', margin: '0 0 4px' },
-  cursoCiclo: { color: 'rgba(255,255,255,0.4)', fontSize: '13px', margin: '0 0 16px' },
-  tiposList: { display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '12px' },
+  cursoNombre: { color: '#fff', fontSize: '18px', fontWeight: '600', margin: 0 },
+  cursoCiclo: { color: 'rgba(255,255,255,0.4)', fontSize: '13px', margin: 0 },
+  tiposList: { display: 'flex', flexWrap: 'wrap', gap: '6px' },
   tipoTag: { background: 'rgba(102,126,234,0.15)', color: '#a78bfa', padding: '3px 10px', borderRadius: '6px', fontSize: '12px' },
-  cursoFooter: { marginBottom: '12px' },
-  silaboTag: { color: 'rgba(255,255,255,0.4)', fontSize: '12px' },
+  silaboTag: { color: 'rgba(255,255,255,0.4)', fontSize: '12px', margin: 0 },
   codigoHint: { color: 'rgba(255,255,255,0.35)', fontSize: '12px', margin: 0, background: 'rgba(167,139,250,0.06)', padding: '8px 12px', borderRadius: '8px' },
+  solicitudesBtn: { width: '100%', padding: '10px', borderRadius: '10px', background: 'rgba(102,126,234,0.12)', border: '1px solid rgba(102,126,234,0.2)', color: '#a78bfa', cursor: 'pointer', fontSize: '13px', fontWeight: '500', marginTop: '4px' },
   overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 1000, overflowY: 'auto', padding: '32px' },
   modal: { background: '#1a1535', borderRadius: '20px', padding: '32px', width: '100%', maxWidth: '680px', border: '1px solid rgba(255,255,255,0.1)' },
-  modalHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' },
-  modalTitle: { color: '#fff', fontSize: '20px', fontWeight: '700', margin: 0 },
+  modalHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px' },
+  modalTitle: { color: '#fff', fontSize: '20px', fontWeight: '700', margin: '0 0 4px' },
   closeBtn: { background: 'rgba(255,255,255,0.08)', border: 'none', color: 'rgba(255,255,255,0.6)', cursor: 'pointer', fontSize: '16px', width: '32px', height: '32px', borderRadius: '8px' },
+  seccion: { marginBottom: '24px' },
+  seccionTitle: { color: '#fff', fontSize: '15px', fontWeight: '600', margin: '0 0 12px', display: 'flex', alignItems: 'center', gap: '8px' },
+  badgeRed: { background: 'rgba(239,68,68,0.2)', color: '#ef4444', padding: '2px 8px', borderRadius: '10px', fontSize: '12px', fontWeight: '700' },
+  badgeGreen: { background: 'rgba(34,197,94,0.2)', color: '#22c55e', padding: '2px 8px', borderRadius: '10px', fontSize: '12px', fontWeight: '700' },
+  emptyText: { color: 'rgba(255,255,255,0.3)', fontSize: '13px' },
+  alumnoRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.04)', borderRadius: '12px', padding: '14px 16px', marginBottom: '8px', border: '1px solid rgba(239,68,68,0.15)' },
+  alumnoRowAprobado: { display: 'flex', alignItems: 'center', gap: '12px', background: 'rgba(255,255,255,0.03)', borderRadius: '12px', padding: '12px 16px', marginBottom: '8px', border: '1px solid rgba(34,197,94,0.1)' },
+  alumnoInfo: { display: 'flex', alignItems: 'center', gap: '12px' },
+  alumnoAvatar: { fontSize: '24px' },
+  alumnoNombre: { color: '#fff', fontSize: '14px', fontWeight: '500', margin: '0 0 2px' },
+  alumnoEmail: { color: 'rgba(255,255,255,0.4)', fontSize: '12px', margin: 0 },
+  aprobarBtn: { padding: '8px 16px', borderRadius: '8px', background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', cursor: 'pointer', fontSize: '13px', fontWeight: '600' },
+  rechazarBtn: { padding: '8px 16px', borderRadius: '8px', background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)', color: '#ef4444', cursor: 'pointer', fontSize: '13px', fontWeight: '600' },
   grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' },
   label: { display: 'block', color: 'rgba(255,255,255,0.6)', fontSize: '13px', fontWeight: '500', marginBottom: '8px' },
   input: { width: '100%', padding: '11px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.06)', color: '#fff', fontSize: '14px', outline: 'none', boxSizing: 'border-box' },
   silaboBox: { background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.15)', borderRadius: '12px', padding: '16px', marginBottom: '20px' },
-  uploadBtn: { display: 'inline-block', padding: '8px 16px', borderRadius: '8px', background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', fontSize: '13px', cursor: 'pointer', whiteSpace: 'nowrap' },
+  uploadBtn: { display: 'inline-block', padding: '8px 16px', borderRadius: '8px', background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', fontSize: '13px', cursor: 'pointer' },
   tipoRow: { display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '10px' },
-  pesoInput: { display: 'flex', alignItems: 'center', gap: '6px' },
   removeBtn: { background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.2)', color: '#ef4444', borderRadius: '8px', cursor: 'pointer', padding: '8px 10px', fontSize: '13px' },
-  addTipoBtn: { width: '100%', padding: '10px', borderRadius: '10px', border: '2px dashed rgba(102,126,234,0.3)', background: 'transparent', color: '#a78bfa', cursor: 'pointer', fontSize: '13px', marginTop: '4px' },
+  addTipoBtn: { width: '100%', padding: '10px', borderRadius: '10px', border: '2px dashed rgba(102,126,234,0.3)', background: 'transparent', color: '#a78bfa', cursor: 'pointer', fontSize: '13px' },
 };

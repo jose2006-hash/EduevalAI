@@ -1,7 +1,7 @@
 // src/firebase/services.js
 import {
   collection, doc, addDoc, getDoc, getDocs,
-  updateDoc, deleteDoc, query, where, orderBy, serverTimestamp
+  updateDoc, query, where, orderBy, serverTimestamp
 } from 'firebase/firestore';
 import {
   createUserWithEmailAndPassword,
@@ -37,14 +37,20 @@ export const getUserData = async (uid) => {
   return snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
 };
 
+export const getAllAlumnos = async () => {
+  const q = query(collection(db, 'usuarios'), where('rol', '==', 'alumno'));
+  const snap = await getDocs(q);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+};
+
 // ─── CURSOS ──────────────────────────────────────────────────────────────────
 
 const generarCodigo = () => {
   const letras = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
   const nums = '0123456789';
-  const parte1 = Array.from({length: 4}, () => letras[Math.floor(Math.random()*letras.length)]).join('');
-  const parte2 = Array.from({length: 4}, () => nums[Math.floor(Math.random()*nums.length)]).join('');
-  return `${parte1}-${parte2}`;
+  const p1 = Array.from({length: 4}, () => letras[Math.floor(Math.random()*letras.length)]).join('');
+  const p2 = Array.from({length: 4}, () => nums[Math.floor(Math.random()*nums.length)]).join('');
+  return `${p1}-${p2}`;
 };
 
 export const crearCurso = async (datos) => {
@@ -84,23 +90,36 @@ export const actualizarCurso = (id, datos) =>
 
 // ─── MATRÍCULAS ──────────────────────────────────────────────────────────────
 
-export const matricularAlumno = async (alumnoUid, alumnoNombre, cursoId) => {
-  // Verificar si ya está matriculado
+export const solicitarMatricula = async (alumnoUid, alumnoNombre, alumnoEmail, cursoId) => {
+  // Verificar si ya existe solicitud
   const q = query(collection(db, 'matriculas'),
     where('alumnoUid', '==', alumnoUid),
     where('cursoId', '==', cursoId));
   const snap = await getDocs(q);
-  if (!snap.empty) return { id: snap.docs[0].id, yaExiste: true };
-
+  if (!snap.empty) {
+    return { id: snap.docs[0].id, estado: snap.docs[0].data().estado, yaExiste: true };
+  }
   const ref = await addDoc(collection(db, 'matriculas'), {
     alumnoUid,
     alumnoNombre,
+    alumnoEmail,
     cursoId,
-    estado: 'activo',
+    estado: 'pendiente', // pendiente | aprobado | rechazado
     creadoEn: serverTimestamp(),
   });
-  return { id: ref.id, yaExiste: false };
+  return { id: ref.id, estado: 'pendiente', yaExiste: false };
 };
+
+export const aprobarMatricula = (matriculaId) =>
+  updateDoc(doc(db, 'matriculas', matriculaId), {
+    estado: 'aprobado',
+    aprobadoEn: serverTimestamp(),
+  });
+
+export const rechazarMatricula = (matriculaId) =>
+  updateDoc(doc(db, 'matriculas', matriculaId), {
+    estado: 'rechazado',
+  });
 
 export const getMatriculasByAlumno = async (alumnoUid) => {
   const q = query(collection(db, 'matriculas'), where('alumnoUid', '==', alumnoUid));
@@ -110,6 +129,14 @@ export const getMatriculasByAlumno = async (alumnoUid) => {
 
 export const getMatriculasByCurso = async (cursoId) => {
   const q = query(collection(db, 'matriculas'), where('cursoId', '==', cursoId));
+  const snap = await getDocs(q);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+};
+
+export const getPendientesByCurso = async (cursoId) => {
+  const q = query(collection(db, 'matriculas'),
+    where('cursoId', '==', cursoId),
+    where('estado', '==', 'pendiente'));
   const snap = await getDocs(q);
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 };
@@ -177,36 +204,23 @@ export const getEvaluacionesByAlumno = async (alumnoUid) => {
 };
 
 export const getTodasEvaluaciones = async () => {
-  const snap = await getDocs(query(collection(db, 'evaluaciones'), orderBy('creadoEn', 'desc')));
+  const snap = await getDocs(collection(db, 'evaluaciones'));
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 };
 
 // ─── PONDERADO FINAL ─────────────────────────────────────────────────────────
 
 export const calcularNotaFinal = (entregas, tiposEvaluacion) => {
-  // tiposEvaluacion: [{nombre, peso}]  — los pesos deben sumar 100
   let notaFinal = 0;
   let pesoUsado = 0;
-
   for (const tipo of tiposEvaluacion) {
-    const entregasTipo = entregas.filter(e =>
-      e.tipoEvaluacion === tipo.nombre && e.estado === 'evaluado'
-    );
-    if (entregasTipo.length === 0) continue;
-
-    const promTipo = entregasTipo.reduce((s, e) => s + (e.notaFinal || 0), 0) / entregasTipo.length;
-    notaFinal += promTipo * (tipo.peso / 100);
+    const ents = entregas.filter(e => e.tipoEvaluacion === tipo.nombre && e.estado === 'evaluado');
+    if (ents.length === 0) continue;
+    const prom = ents.reduce((s, e) => s + (e.notaFinal || 0), 0) / ents.length;
+    notaFinal += prom * (tipo.peso / 100);
     pesoUsado += tipo.peso;
   }
-
-  // Si no hay entregas en todos los tipos, ajusta proporcional
   if (pesoUsado === 0) return null;
   if (pesoUsado < 100) notaFinal = notaFinal * (100 / pesoUsado);
-
   return Math.round(notaFinal * 10) / 10;
-};
-export const getAllAlumnos = async () => {
-  const q = query(collection(db, 'usuarios'), where('rol', '==', 'alumno'));
-  const snap = await getDocs(q);
-  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 };
