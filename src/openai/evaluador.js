@@ -2,7 +2,14 @@
 
 const OPENAI_API_KEY = import.meta.env.VITE_OPENAI_API_KEY;
 
-export const evaluarTrabajo = async (trabajoTexto, rubrica, curso, tema, silaboTexto = '') => {
+export const evaluarTrabajo = async (
+  trabajoTexto,
+  rubrica,
+  curso,
+  tema,
+  silaboTexto = '',
+  enunciadoTexto = ''   // ← nuevo: descripción/enunciado de la actividad
+) => {
   const criteriosTexto = rubrica.criterios.map((c, i) =>
     `${i + 1}. ${c.nombre} (peso: ${c.peso}%): ${c.descripcion}
    - Excelente (${c.puntajeMax}pts): ${c.niveles?.excelente || 'Cumple todos los requisitos'}
@@ -11,23 +18,39 @@ export const evaluarTrabajo = async (trabajoTexto, rubrica, curso, tema, silaboT
    - Insuficiente (${Math.round(c.puntajeMax * 0.25)}pts): ${c.niveles?.insuficiente || 'No cumple'}`
   ).join('\n\n');
 
+  // Sección del sílabo (contexto general del curso)
   const silaboSeccion = silaboTexto
-    ? `\n=== SÍLABO DEL CURSO (referencia de contenidos y metodología esperada) ===\n${silaboTexto.substring(0, 4000)}\n`
+    ? `\n=== SÍLABO DEL CURSO (contenidos y metodología del curso) ===\n${silaboTexto.substring(0, 3000)}\n`
     : '';
 
-  const prompt = `Eres un evaluador académico experto en el curso de ${curso}.
-Debes evaluar el siguiente trabajo sobre "${tema}" usando ESTRICTAMENTE la rúbrica proporcionada.
-${silaboTexto ? 'Considera el sílabo para verificar si el trabajo se alinea con los contenidos y metodología establecidos.' : ''}
+  // Sección del enunciado (lo que el docente pidió en ESTA actividad)
+  const enunciadoSeccion = enunciadoTexto
+    ? `\n=== ENUNCIADO DE LA ACTIVIDAD (lo que el docente solicitó específicamente) ===\n${enunciadoTexto.substring(0, 3000)}\n`
+    : '';
 
-=== RÚBRICA ===
+  const tieneEnunciado = enunciadoTexto.trim().length > 0;
+  const tieneSilabo = silaboTexto.trim().length > 0;
+
+  const instruccionContexto = tieneEnunciado
+    ? 'Evalúa si el trabajo responde correctamente al enunciado de la actividad. Penaliza si el alumno no abordó lo que se pidió específicamente.'
+    : tieneSilabo
+      ? 'Considera el sílabo para verificar si el trabajo se alinea con los contenidos del curso.'
+      : '';
+
+  const prompt = `Eres un evaluador académico experto en el curso de "${curso}".
+Evalúa el trabajo sobre "${tema}" usando ESTRICTAMENTE la rúbrica proporcionada.
+${instruccionContexto}
+
+=== RÚBRICA DE EVALUACIÓN ===
 ${criteriosTexto}
 Puntaje total máximo: ${rubrica.puntajeTotal || 20} puntos
-${silaboSeccion}
+${enunciadoSeccion}${silaboSeccion}
 === TRABAJO DEL ALUMNO ===
 ${trabajoTexto}
 
 === INSTRUCCIONES ===
-Evalúa el trabajo criterio por criterio. Responde ÚNICAMENTE en formato JSON con esta estructura exacta:
+Evalúa criterio por criterio. Si existe enunciado, verifica que el alumno lo haya respondido correctamente.
+Responde ÚNICAMENTE en formato JSON con esta estructura exacta:
 
 {
   "criterios": [

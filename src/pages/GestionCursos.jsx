@@ -4,7 +4,9 @@ import { useNavigate } from 'react-router-dom';
 import {
   getCursosByDocente, crearCurso,
   getMatriculasByCurso, getPendientesByCurso,
-  aprobarMatricula, rechazarMatricula
+  aprobarMatricula, rechazarMatricula,
+  crearActividad, getActividadesByCurso,
+  getRubricas,
 } from '../firebase/services.js';
 import { useAuth } from '../components/AuthContext.jsx';
 
@@ -25,7 +27,20 @@ export default function GestionCursos() {
   const [cursoPendientes, setCursoPendientes] = useState(null);
   const [pendientes, setPendientes] = useState([]);
   const [aprobados, setAprobados] = useState([]);
-  // ✅ FIX 1: único useState con codigo incluido
+
+  // Estado para actividades
+  const [cursoActividades, setCursoActividades] = useState(null); // curso seleccionado para ver/crear actividades
+  const [actividades, setActividades] = useState([]);
+  const [rubricas, setRubricas] = useState([]);
+  const [showActForm, setShowActForm] = useState(false);
+  const [guardandoAct, setGuardandoAct] = useState(false);
+  const [msgAct, setMsgAct] = useState('');
+  const [formAct, setFormAct] = useState({
+    titulo: '', tipoEvaluacion: '', descripcion: '',
+    enunciadoTexto: '', enunciadoNombre: '', rubricaId: '',
+  });
+  const [leyendoAct, setLeyendoAct] = useState(false);
+
   const [form, setForm] = useState({
     nombre: '', seccion: '', codigo: '', descripcion: '', ciclo: '',
     silaboTexto: '', silaboNombre: '',
@@ -60,6 +75,71 @@ export default function GestionCursos() {
     await abrirSolicitudes(cursoPendientes);
   };
 
+  // ── Actividades ────────────────────────────────────────────────────────────
+  const abrirActividades = async (curso) => {
+    setCursoActividades(curso);
+    setShowActForm(false);
+    setMsgAct('');
+    const [acts, rubs] = await Promise.all([
+      getActividadesByCurso(curso.id),
+      getRubricas(curso.id),
+    ]);
+    setActividades(acts);
+    setRubricas(rubs);
+    setFormAct(f => ({ ...f, tipoEvaluacion: curso.tiposEvaluacion?.[0]?.nombre || '' }));
+  };
+
+  const leerPDFActividad = (file) => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const text = ev.target.result
+          .replace(/[^\x20-\x7E\xA0-\xFF\n]/g, ' ')
+          .replace(/\s{3,}/g, '\n')
+          .substring(0, 8000);
+        resolve(text);
+      };
+      reader.readAsText(file, 'latin1');
+    });
+  };
+
+  const handleEnunciadoPDF = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setLeyendoAct(true);
+    const texto = await leerPDFActividad(file);
+    setFormAct(f => ({ ...f, enunciadoTexto: texto, enunciadoNombre: file.name }));
+    setLeyendoAct(false);
+  };
+
+  const handleGuardarActividad = async () => {
+    if (!formAct.titulo.trim()) return setMsgAct('❌ El título es obligatorio');
+    if (!formAct.tipoEvaluacion) return setMsgAct('❌ Selecciona el tipo de evaluación');
+    if (!formAct.enunciadoTexto.trim() && !formAct.descripcion.trim())
+      return setMsgAct('❌ Agrega una descripción o sube el enunciado en PDF');
+    setGuardandoAct(true);
+    setMsgAct('');
+    try {
+      await crearActividad({
+        ...formAct,
+        cursoId: cursoActividades.id,
+        cursoNombre: cursoActividades.nombre,
+        docenteUid: userData.uid,
+        docenteNombre: userData.nombre,
+      });
+      setMsgAct(`✅ Actividad "${formAct.titulo}" publicada`);
+      setShowActForm(false);
+      setFormAct({ titulo: '', tipoEvaluacion: cursoActividades.tiposEvaluacion?.[0]?.nombre || '', descripcion: '', enunciadoTexto: '', enunciadoNombre: '', rubricaId: '' });
+      const acts = await getActividadesByCurso(cursoActividades.id);
+      setActividades(acts);
+    } catch (err) {
+      setMsgAct('❌ Error: ' + err.message);
+    } finally {
+      setGuardandoAct(false);
+    }
+  };
+
+  // ── Curso form ─────────────────────────────────────────────────────────────
   const handleSilaboPDF = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -86,21 +166,14 @@ export default function GestionCursos() {
   const handleGuardar = async () => {
     if (!form.nombre.trim()) return setMsg('❌ El nombre del curso es obligatorio');
     if (!form.seccion.trim()) return setMsg('❌ La sección es obligatoria');
-    // ✅ FIX 2: validación de código antes de guardar
     if (!form.codigo.trim()) return setMsg('❌ El código del curso es obligatorio');
     if (totalPeso !== 100) return setMsg(`❌ Los pesos deben sumar 100% (actualmente: ${totalPeso}%)`);
-    setGuardando(true);
-    setMsg('');
+    setGuardando(true); setMsg('');
     try {
-      await crearCurso({
-        ...form,
-        docenteUid: userData.uid,
-        docenteNombre: userData.nombre,
-      });
+      await crearCurso({ ...form, docenteUid: userData.uid, docenteNombre: userData.nombre });
       setMsg(`✅ Curso "${form.nombre} - Sección ${form.seccion}" creado exitosamente`);
       await cargarCursos();
       setShowForm(false);
-      // ✅ FIX 3: reset incluye codigo: ''
       setForm({ nombre: '', seccion: '', codigo: '', descripcion: '', ciclo: '', silaboTexto: '', silaboNombre: '', tiposEvaluacion: TIPOS_DEFAULT });
     } catch (err) {
       setMsg('❌ Error: ' + err.message);
@@ -133,26 +206,26 @@ export default function GestionCursos() {
               </div>
             </div>
             <h3 style={s.cursoNombre}>{c.nombre}</h3>
-            <p style={s.cursoCiclo}>
-              {c.ciclo && `${c.ciclo} · `}
-              {c.descripcion}
-            </p>
+            <p style={s.cursoCiclo}>{c.ciclo && `${c.ciclo} · `}{c.descripcion}</p>
             <div style={s.tiposList}>
               {c.tiposEvaluacion?.map((t, j) => (
                 <span key={j} style={s.tipoTag}>{t.nombre} {t.peso}%</span>
               ))}
             </div>
-            {c.silaboNombre && (
-              <p style={s.silaboTag}>📄 {c.silaboNombre}</p>
-            )}
-            {/* ✅ FIX 4: infoBox muestra código */}
+            {c.silaboNombre && <p style={s.silaboTag}>📄 {c.silaboNombre}</p>}
             <div style={s.infoBox}>
               <p style={s.infoLabel}>Los alumnos ingresan con:</p>
               <p style={s.infoValue}>Código: <strong style={{ color: '#a78bfa' }}>{c.codigo}</strong> + nombre del profesor</p>
             </div>
-            <button style={s.solicitudesBtn} onClick={() => abrirSolicitudes(c)}>
-              👥 Ver alumnos y solicitudes
-            </button>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px' }}>
+              {/* Botón actividades — acción principal */}
+              <button style={s.actividadesBtn} onClick={() => abrirActividades(c)}>
+                📝 Actividades y enunciados
+              </button>
+              <button style={s.solicitudesBtn} onClick={() => abrirSolicitudes(c)}>
+                👥 Ver alumnos y solicitudes
+              </button>
+            </div>
           </div>
         ))}
         {cursos.length === 0 && (
@@ -162,7 +235,7 @@ export default function GestionCursos() {
         )}
       </div>
 
-      {/* Modal solicitudes */}
+      {/* ── Modal solicitudes ── */}
       {cursoPendientes && (
         <div style={s.overlay}>
           <div style={s.modal}>
@@ -219,14 +292,146 @@ export default function GestionCursos() {
               ))}
             </div>
 
-            <button style={{ ...s.primaryBtn, width: '100%' }} onClick={() => setCursoPendientes(null)}>
-              Cerrar
-            </button>
+            <button style={{ ...s.primaryBtn, width: '100%' }} onClick={() => setCursoPendientes(null)}>Cerrar</button>
           </div>
         </div>
       )}
 
-      {/* Modal nuevo curso */}
+      {/* ── Modal actividades ── */}
+      {cursoActividades && (
+        <div style={s.overlay}>
+          <div style={{ ...s.modal, maxWidth: '720px' }}>
+            <div style={s.modalHeader}>
+              <div>
+                <h2 style={s.modalTitle}>📝 Actividades — {cursoActividades.nombre}</h2>
+                <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '13px', margin: 0 }}>
+                  Sección {cursoActividades.seccion} · {cursoActividades.ciclo}
+                </p>
+              </div>
+              <button style={s.closeBtn} onClick={() => { setCursoActividades(null); setShowActForm(false); }}>✕</button>
+            </div>
+
+            {msgAct && (
+              <div style={{ color: msgAct.includes('✅') ? '#22c55e' : '#ef4444', marginBottom: '16px', fontSize: '13px', background: msgAct.includes('✅') ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)', padding: '10px 14px', borderRadius: '8px' }}>
+                {msgAct}
+              </div>
+            )}
+
+            {/* Lista de actividades existentes */}
+            {actividades.length > 0 && (
+              <div style={{ marginBottom: '20px' }}>
+                <h3 style={{ color: 'rgba(255,255,255,0.6)', fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 12px' }}>
+                  Actividades publicadas ({actividades.length})
+                </h3>
+                {actividades.map((a, i) => (
+                  <div key={i} style={s.actividadRow}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                        <span style={{ color: '#fff', fontWeight: '600', fontSize: '14px' }}>{a.titulo}</span>
+                        <span style={s.tipoBadge}>{a.tipoEvaluacion}</span>
+                        {a.enunciadoNombre && <span style={s.archivoBadge}>📄 {a.enunciadoNombre}</span>}
+                        {a.rubricaId && <span style={s.rubricaBadge}>📋 Rúbrica</span>}
+                      </div>
+                      {a.descripcion && (
+                        <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '12px', margin: 0, lineHeight: '1.4' }}>
+                          {a.descripcion.substring(0, 120)}{a.descripcion.length > 120 ? '…' : ''}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {actividades.length === 0 && !showActForm && (
+              <div style={{ textAlign: 'center', padding: '32px 0', color: 'rgba(255,255,255,0.3)', fontSize: '14px' }}>
+                No hay actividades publicadas aún
+              </div>
+            )}
+
+            {/* Formulario nueva actividad */}
+            {showActForm ? (
+              <div style={s.actForm}>
+                <h3 style={{ color: '#fff', fontSize: '15px', fontWeight: '600', margin: '0 0 16px' }}>Nueva actividad</h3>
+
+                <div style={s.grid2}>
+                  <div>
+                    <label style={s.label}>Título *</label>
+                    <input style={s.input} placeholder="Ej: Práctica Calificada 1"
+                      value={formAct.titulo}
+                      onChange={e => setFormAct(f => ({ ...f, titulo: e.target.value }))} />
+                  </div>
+                  <div>
+                    <label style={s.label}>Tipo de evaluación *</label>
+                    <select style={s.select} value={formAct.tipoEvaluacion}
+                      onChange={e => setFormAct(f => ({ ...f, tipoEvaluacion: e.target.value }))}>
+                      <option value="">Seleccionar...</option>
+                      {cursoActividades.tiposEvaluacion?.map((t, i) => (
+                        <option key={i} value={t.nombre}>{t.nombre} ({t.peso}%)</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div style={{ marginBottom: '16px' }}>
+                  <label style={s.label}>Descripción breve</label>
+                  <input style={s.input} placeholder="Ej: Resolver los ejercicios de los temas 3 y 4"
+                    value={formAct.descripcion}
+                    onChange={e => setFormAct(f => ({ ...f, descripcion: e.target.value }))} />
+                </div>
+
+                {/* Enunciado PDF */}
+                <div style={s.enunciadoBox}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <label style={s.label}>📄 Enunciado / Guía de la actividad</label>
+                    <label style={s.uploadBtn}>
+                      {leyendoAct ? '⏳ Leyendo...' : formAct.enunciadoNombre ? `✅ ${formAct.enunciadoNombre}` : '📎 Subir PDF'}
+                      <input type="file" accept=".pdf" style={{ display: 'none' }} onChange={handleEnunciadoPDF} />
+                    </label>
+                  </div>
+                  <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px', margin: 0 }}>
+                    La IA usará este enunciado para evaluar si el alumno respondió lo que se pidió
+                  </p>
+                  {/* También se puede escribir directamente */}
+                  {!formAct.enunciadoNombre && (
+                    <textarea
+                      style={{ ...s.textarea, marginTop: '10px', minHeight: '80px' }}
+                      placeholder="O escribe el enunciado directamente aquí..."
+                      value={formAct.enunciadoTexto}
+                      onChange={e => setFormAct(f => ({ ...f, enunciadoTexto: e.target.value }))}
+                    />
+                  )}
+                </div>
+
+                {/* Rúbrica */}
+                {rubricas.length > 0 && (
+                  <div style={{ marginBottom: '16px' }}>
+                    <label style={s.label}>Rúbrica de evaluación</label>
+                    <select style={s.select} value={formAct.rubricaId}
+                      onChange={e => setFormAct(f => ({ ...f, rubricaId: e.target.value }))}>
+                      <option value="">Sin rúbrica específica</option>
+                      {rubricas.map(r => <option key={r.id} value={r.id}>{r.nombre}</option>)}
+                    </select>
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', gap: '10px', marginTop: '4px' }}>
+                  <button style={s.secondaryBtn} onClick={() => { setShowActForm(false); setMsgAct(''); }}>Cancelar</button>
+                  <button style={s.primaryBtn} onClick={handleGuardarActividad} disabled={guardandoAct}>
+                    {guardandoAct ? 'Publicando...' : '📢 Publicar actividad'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button style={{ ...s.primaryBtn, width: '100%' }} onClick={() => setShowActForm(true)}>
+                + Nueva actividad
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal nuevo curso ── */}
       {showForm && (
         <div style={s.overlay}>
           <div style={s.modal}>
@@ -235,7 +440,6 @@ export default function GestionCursos() {
               <button style={s.closeBtn} onClick={() => setShowForm(false)}>✕</button>
             </div>
 
-            {/* ✅ FIX 5: grid3 con nombre (span 2) + sección */}
             <div style={s.grid3}>
               <div style={{ gridColumn: 'span 2' }}>
                 <label style={s.label}>Nombre del curso *</label>
@@ -244,19 +448,18 @@ export default function GestionCursos() {
               </div>
               <div>
                 <label style={s.label}>Sección *</label>
-                <input style={s.input} placeholder="Ej: A, B, C"
+                <input style={s.input} placeholder="Ej: A"
                   value={form.seccion} onChange={e => setForm(f => ({ ...f, seccion: e.target.value.toUpperCase() }))} />
               </div>
             </div>
 
-            {/* ✅ FIX 6: grid2 con código + ciclo (sin duplicado) */}
             <div style={s.grid2}>
               <div>
                 <label style={s.label}>Código del curso *</label>
-                <input style={s.input} placeholder="Ej: CONT-2024-A (tú lo defines)"
+                <input style={s.input} placeholder="Ej: CONT-2024-A"
                   value={form.codigo} onChange={e => setForm(f => ({ ...f, codigo: e.target.value.toUpperCase() }))} />
                 <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px', marginTop: '6px' }}>
-                  Este código lo compartirás con tus alumnos para que puedan encontrarte
+                  Comparte este código con tus alumnos
                 </p>
               </div>
               <div>
@@ -340,8 +543,9 @@ const s = {
   silaboTag: { color: 'rgba(255,255,255,0.4)', fontSize: '12px', margin: 0 },
   infoBox: { background: 'rgba(102,126,234,0.06)', border: '1px solid rgba(102,126,234,0.15)', borderRadius: '10px', padding: '10px 14px' },
   infoLabel: { color: 'rgba(255,255,255,0.35)', fontSize: '11px', margin: '0 0 4px', textTransform: 'uppercase', letterSpacing: '0.05em' },
-  infoValue: { color: '#a78bfa', fontSize: '12px', margin: 0, fontStyle: 'italic' },
-  solicitudesBtn: { width: '100%', padding: '10px', borderRadius: '10px', background: 'rgba(102,126,234,0.12)', border: '1px solid rgba(102,126,234,0.2)', color: '#a78bfa', cursor: 'pointer', fontSize: '13px', fontWeight: '500' },
+  infoValue: { color: '#a78bfa', fontSize: '12px', margin: 0 },
+  actividadesBtn: { width: '100%', padding: '10px', borderRadius: '10px', background: 'linear-gradient(135deg,rgba(102,126,234,0.25),rgba(118,75,162,0.25))', border: '1px solid rgba(102,126,234,0.35)', color: '#a78bfa', cursor: 'pointer', fontSize: '13px', fontWeight: '600' },
+  solicitudesBtn: { width: '100%', padding: '10px', borderRadius: '10px', background: 'rgba(102,126,234,0.08)', border: '1px solid rgba(102,126,234,0.15)', color: 'rgba(167,139,250,0.7)', cursor: 'pointer', fontSize: '13px', fontWeight: '500' },
   overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 1000, overflowY: 'auto', padding: '32px' },
   modal: { background: '#1a1535', borderRadius: '20px', padding: '32px', width: '100%', maxWidth: '680px', border: '1px solid rgba(255,255,255,0.1)' },
   modalHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px' },
@@ -360,10 +564,20 @@ const s = {
   alumnoEmail: { color: 'rgba(255,255,255,0.4)', fontSize: '12px', margin: 0 },
   aprobarBtn: { padding: '8px 16px', borderRadius: '8px', background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', cursor: 'pointer', fontSize: '13px', fontWeight: '600' },
   rechazarBtn: { padding: '8px 16px', borderRadius: '8px', background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)', color: '#ef4444', cursor: 'pointer', fontSize: '13px', fontWeight: '600' },
+  // Actividades
+  actividadRow: { display: 'flex', alignItems: 'flex-start', gap: '12px', background: 'rgba(102,126,234,0.06)', borderRadius: '12px', padding: '14px 16px', marginBottom: '8px', border: '1px solid rgba(102,126,234,0.15)' },
+  tipoBadge: { background: 'rgba(167,139,250,0.15)', color: '#a78bfa', padding: '2px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: '600' },
+  archivoBadge: { background: 'rgba(34,197,94,0.1)', color: '#22c55e', padding: '2px 8px', borderRadius: '6px', fontSize: '11px' },
+  rubricaBadge: { background: 'rgba(59,130,246,0.1)', color: '#60a5fa', padding: '2px 8px', borderRadius: '6px', fontSize: '11px' },
+  actForm: { background: 'rgba(255,255,255,0.03)', borderRadius: '14px', padding: '20px', border: '1px solid rgba(255,255,255,0.08)' },
+  enunciadoBox: { background: 'rgba(102,126,234,0.06)', border: '1px solid rgba(102,126,234,0.15)', borderRadius: '12px', padding: '16px', marginBottom: '16px' },
+  textarea: { width: '100%', padding: '12px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.04)', color: '#fff', fontSize: '13px', outline: 'none', resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box', lineHeight: '1.5' },
+  // Curso form
   grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' },
   grid3: { display: 'grid', gridTemplateColumns: '1fr 1fr 120px', gap: '16px', marginBottom: '16px' },
   label: { display: 'block', color: 'rgba(255,255,255,0.6)', fontSize: '13px', fontWeight: '500', marginBottom: '8px' },
   input: { width: '100%', padding: '11px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.06)', color: '#fff', fontSize: '14px', outline: 'none', boxSizing: 'border-box' },
+  select: { width: '100%', padding: '11px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(20,16,50,0.95)', color: '#fff', fontSize: '14px', outline: 'none', boxSizing: 'border-box' },
   silaboBox: { background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.15)', borderRadius: '12px', padding: '16px', marginBottom: '20px' },
   uploadBtn: { display: 'inline-block', padding: '8px 16px', borderRadius: '8px', background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', fontSize: '13px', cursor: 'pointer' },
   tipoRow: { display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '10px' },

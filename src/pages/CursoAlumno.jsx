@@ -2,7 +2,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
-  getCurso, getEntregasByAlumnoYCurso, crearEntrega, calcularNotaFinal, getRubricas
+  getCurso, getEntregasByAlumnoYCurso, crearEntrega,
+  calcularNotaFinal, getRubricas, getActividadesByCurso
 } from '../firebase/services.js';
 import { evaluarTrabajo } from '../openai/evaluador.js';
 import { useAuth } from '../components/AuthContext.jsx';
@@ -16,32 +17,61 @@ export default function CursoAlumno() {
   const [curso, setCurso] = useState(null);
   const [entregas, setEntregas] = useState([]);
   const [rubricas, setRubricas] = useState([]);
+  const [actividades, setActividades] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [entregaSeleccionada, setEntregaSeleccionada] = useState(null);
   const [dragging, setDragging] = useState(false);
 
-  const [form, setForm] = useState({ tipoEvaluacion: '', titulo: '', texto: '', rubricaId: '' });
+  const [form, setForm] = useState({
+    tipoEvaluacion: '', actividadId: '', titulo: '', texto: '', rubricaId: '',
+  });
+  const [actividadSeleccionada, setActividadSeleccionada] = useState(null);
   const [archivo, setArchivo] = useState(null);
   const [archivoTexto, setArchivoTexto] = useState('');
   const [leyendo, setLeyendo] = useState(false);
   const [enviando, setEnviando] = useState(false);
   const [error, setError] = useState('');
   const [msg, setMsg] = useState('');
-  const [tabActivo, setTabActivo] = useState('pdf'); // 'pdf' | 'texto'
+  const [tabActivo, setTabActivo] = useState('pdf');
 
   useEffect(() => { cargar(); }, [cursoId, user]);
 
   const cargar = async () => {
-    const [c, ents, rubs] = await Promise.all([
+    const [c, ents, rubs, acts] = await Promise.all([
       getCurso(cursoId),
       getEntregasByAlumnoYCurso(user.uid, cursoId),
       getRubricas(cursoId),
+      getActividadesByCurso(cursoId),
     ]);
     setCurso(c);
     setEntregas(ents);
     setRubricas(rubs);
+    setActividades(acts);
     setLoading(false);
+  };
+
+  // Actividades filtradas por tipo seleccionado
+  const actividadesFiltradas = form.tipoEvaluacion
+    ? actividades.filter(a => a.tipoEvaluacion === form.tipoEvaluacion)
+    : actividades;
+
+  // Cuando cambia el tipo de evaluación, resetear actividad seleccionada
+  const handleTipoChange = (tipo) => {
+    setForm(f => ({ ...f, tipoEvaluacion: tipo, actividadId: '', titulo: '' }));
+    setActividadSeleccionada(null);
+  };
+
+  // Cuando selecciona una actividad, pre-rellenar título y rúbrica
+  const handleActividadChange = (id) => {
+    const act = actividades.find(a => a.id === id);
+    setActividadSeleccionada(act || null);
+    setForm(f => ({
+      ...f,
+      actividadId: id,
+      titulo: act ? act.titulo : '',
+      rubricaId: act?.rubricaId || f.rubricaId,
+    }));
   };
 
   const leerPDF = (file) => {
@@ -60,31 +90,17 @@ export default function CursoAlumno() {
 
   const procesarArchivo = async (file) => {
     if (!file) return;
-    if (file.type !== 'application/pdf') {
-      setError('Solo se aceptan archivos PDF');
-      return;
-    }
-    setLeyendo(true);
-    setError('');
+    if (file.type !== 'application/pdf') { setError('Solo se aceptan archivos PDF'); return; }
+    setLeyendo(true); setError('');
     const texto = await leerPDF(file);
-    setArchivo(file);
-    setArchivoTexto(texto);
-    setTabActivo('pdf');
+    setArchivo(file); setArchivoTexto(texto); setTabActivo('pdf');
     setLeyendo(false);
   };
 
-  // Drag & Drop handlers
   const handleDragOver = (e) => { e.preventDefault(); setDragging(true); };
   const handleDragLeave = () => setDragging(false);
-  const handleDrop = async (e) => {
-    e.preventDefault();
-    setDragging(false);
-    const file = e.dataTransfer.files[0];
-    await procesarArchivo(file);
-  };
-  const handleFileInput = async (e) => {
-    await procesarArchivo(e.target.files[0]);
-  };
+  const handleDrop = async (e) => { e.preventDefault(); setDragging(false); await procesarArchivo(e.dataTransfer.files[0]); };
+  const handleFileInput = async (e) => { await procesarArchivo(e.target.files[0]); };
 
   const handleEnviar = async () => {
     const textoFinal = tabActivo === 'pdf' ? archivoTexto : form.texto;
@@ -94,11 +110,21 @@ export default function CursoAlumno() {
 
     setError(''); setEnviando(true); setMsg('');
     try {
+      // Determinar rúbrica: la de la actividad tiene prioridad
       const rubrica = rubricas.find(r => r.id === form.rubricaId) || rubricas[0];
+
+      // Enunciado de la actividad seleccionada (nuevo)
+      const enunciadoTexto = actividadSeleccionada?.enunciadoTexto || '';
+
       let resultado = null;
       if (rubrica) {
         resultado = await evaluarTrabajo(
-          textoFinal, rubrica, curso.nombre, form.titulo, curso.silaboTexto || ''
+          textoFinal,
+          rubrica,
+          curso.nombre,
+          form.titulo,
+          curso.silaboTexto || '',
+          enunciadoTexto           // ← pasa el enunciado al evaluador
         );
       }
 
@@ -108,6 +134,8 @@ export default function CursoAlumno() {
         cursoId,
         cursoNombre: curso.nombre,
         tipoEvaluacion: form.tipoEvaluacion,
+        actividadId: form.actividadId || null,
+        actividadTitulo: actividadSeleccionada?.titulo || null,
         titulo: form.titulo,
         texto: textoFinal,
         archivoNombre: archivo?.name || null,
@@ -129,7 +157,8 @@ export default function CursoAlumno() {
   };
 
   const resetForm = () => {
-    setForm({ tipoEvaluacion: '', titulo: '', texto: '', rubricaId: '' });
+    setForm({ tipoEvaluacion: '', actividadId: '', titulo: '', texto: '', rubricaId: '' });
+    setActividadSeleccionada(null);
     setArchivo(null); setArchivoTexto(''); setError(''); setTabActivo('pdf');
   };
 
@@ -178,6 +207,7 @@ export default function CursoAlumno() {
           const prom = ents.length
             ? (ents.reduce((sum, e) => sum + (e.notaFinal || 0), 0) / ents.length).toFixed(1)
             : null;
+          const actsDelTipo = actividades.filter(a => a.tipoEvaluacion === t.nombre);
           return (
             <div key={i} style={s.pesoCard}>
               <p style={s.pesoNombre}>{t.nombre}</p>
@@ -186,13 +216,44 @@ export default function CursoAlumno() {
                 {prom ? `${prom}/20` : '—'}
               </p>
               <p style={s.pesoCount}>{ents.length} entrega{ents.length !== 1 ? 's' : ''}</p>
+              {actsDelTipo.length > 0 && (
+                <p style={s.pesoActs}>{actsDelTipo.length} actividad{actsDelTipo.length !== 1 ? 'es' : ''}</p>
+              )}
             </div>
           );
         })}
       </div>
 
+      {/* Actividades disponibles */}
+      {actividades.length > 0 && (
+        <div style={s.actividadesSection}>
+          <h3 style={s.actividadesTitle}>📋 Actividades del docente</h3>
+          <div style={s.actividadesGrid}>
+            {actividades.map((a, i) => (
+              <div key={i} style={s.actividadCard}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px' }}>
+                  <span style={s.actTitulo}>{a.titulo}</span>
+                  <span style={s.actTipoBadge}>{a.tipoEvaluacion}</span>
+                </div>
+                {a.descripcion && <p style={s.actDesc}>{a.descripcion}</p>}
+                {a.enunciadoNombre && (
+                  <p style={s.actArchivo}>📄 Enunciado: {a.enunciadoNombre}</p>
+                )}
+                <button style={s.responderBtn} onClick={() => {
+                  setShowForm(true);
+                  setForm(f => ({ ...f, tipoEvaluacion: a.tipoEvaluacion, actividadId: a.id, titulo: a.titulo, rubricaId: a.rubricaId || '' }));
+                  setActividadSeleccionada(a);
+                }}>
+                  📤 Subir mi trabajo
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '20px' }}>
-        <button style={s.primaryBtn} onClick={() => setShowForm(true)}>+ Subir trabajo</button>
+        <button style={s.primaryBtn} onClick={() => setShowForm(true)}>+ Subir trabajo libre</button>
       </div>
 
       {/* Entregas por tipo */}
@@ -221,6 +282,7 @@ export default function CursoAlumno() {
                         {e.estado === 'evaluado' ? `${e.notaFinal}/20` : '⏳ Pendiente'}
                       </span>
                     </div>
+                    {e.actividadTitulo && <p style={s.actividadTag}>📋 {e.actividadTitulo}</p>}
                     {e.archivoNombre && <p style={s.archivoTag}>📄 {e.archivoNombre}</p>}
                     {e.nivelGlobal && <p style={s.entregaNivel}>{e.nivelGlobal}</p>}
                     <p style={s.entregaFecha}>
@@ -244,16 +306,53 @@ export default function CursoAlumno() {
               <button style={s.closeBtn} onClick={() => { setShowForm(false); resetForm(); }}>✕</button>
             </div>
 
+            {/* Info actividad seleccionada */}
+            {actividadSeleccionada && (
+              <div style={s.actividadInfoBox}>
+                <p style={s.actividadInfoLabel}>📋 Actividad seleccionada</p>
+                <p style={s.actividadInfoTitulo}>{actividadSeleccionada.titulo}</p>
+                {actividadSeleccionada.descripcion && (
+                  <p style={s.actividadInfoDesc}>{actividadSeleccionada.descripcion}</p>
+                )}
+                {actividadSeleccionada.enunciadoNombre && (
+                  <p style={{ color: '#22c55e', fontSize: '12px', margin: '4px 0 0' }}>
+                    📄 Enunciado cargado: {actividadSeleccionada.enunciadoNombre}
+                  </p>
+                )}
+              </div>
+            )}
+
             <div style={s.grid2}>
               <div>
                 <label style={s.label}>Tipo de evaluación *</label>
                 <select style={s.select} value={form.tipoEvaluacion}
-                  onChange={e => setForm(f => ({ ...f, tipoEvaluacion: e.target.value }))}>
+                  onChange={e => handleTipoChange(e.target.value)}>
                   <option value="">Seleccionar...</option>
                   {curso?.tiposEvaluacion?.map((t, i) => (
                     <option key={i} value={t.nombre}>{t.nombre} ({t.peso}%)</option>
                   ))}
                 </select>
+              </div>
+              <div>
+                <label style={s.label}>Actividad (opcional)</label>
+                <select style={s.select} value={form.actividadId}
+                  onChange={e => handleActividadChange(e.target.value)}
+                  disabled={!form.tipoEvaluacion}>
+                  <option value="">Sin actividad específica</option>
+                  {actividadesFiltradas.map(a => (
+                    <option key={a.id} value={a.id}>{a.titulo}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div style={s.grid2}>
+              <div>
+                <label style={s.label}>Título del trabajo *</label>
+                <input style={s.input}
+                  placeholder="Ej: Tarea 1 - Introducción"
+                  value={form.titulo}
+                  onChange={e => setForm(f => ({ ...f, titulo: e.target.value }))} />
               </div>
               <div>
                 <label style={s.label}>Rúbrica de evaluación</label>
@@ -265,58 +364,37 @@ export default function CursoAlumno() {
               </div>
             </div>
 
-            <div style={{ marginBottom: '16px' }}>
-              <label style={s.label}>Título del trabajo *</label>
-              <input style={s.input}
-                placeholder="Ej: Tarea 1 - Introducción a la contabilidad"
-                value={form.titulo}
-                onChange={e => setForm(f => ({ ...f, titulo: e.target.value }))} />
-            </div>
-
             {/* Tabs PDF / Texto */}
             <div style={s.tabs}>
-              <button
-                style={{ ...s.tab, ...(tabActivo === 'pdf' ? s.tabActivo : {}) }}
-                onClick={() => setTabActivo('pdf')}>
+              <button style={{ ...s.tab, ...(tabActivo === 'pdf' ? s.tabActivo : {}) }} onClick={() => setTabActivo('pdf')}>
                 📄 Subir PDF
               </button>
-              <button
-                style={{ ...s.tab, ...(tabActivo === 'texto' ? s.tabActivo : {}) }}
-                onClick={() => setTabActivo('texto')}>
+              <button style={{ ...s.tab, ...(tabActivo === 'texto' ? s.tabActivo : {}) }} onClick={() => setTabActivo('texto')}>
                 ✏️ Escribir texto
               </button>
             </div>
 
-            {/* Drop zone PDF */}
             {tabActivo === 'pdf' && (
               <div
                 ref={dropRef}
                 style={{ ...s.dropZone, ...(dragging ? s.dropZoneActive : {}), ...(archivo ? s.dropZoneDone : {}) }}
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onDrop={handleDrop}
+                onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}
               >
                 {leyendo ? (
-                  <div style={s.dropContent}>
-                    <div style={s.spinner} />
-                    <p style={s.dropText}>Leyendo archivo...</p>
-                  </div>
+                  <div style={s.dropContent}><div style={s.spinner} /><p style={s.dropText}>Leyendo archivo...</p></div>
                 ) : archivo ? (
                   <div style={s.dropContent}>
                     <span style={{ fontSize: '40px' }}>✅</span>
                     <p style={{ ...s.dropText, color: '#22c55e' }}>{archivo.name}</p>
                     <p style={s.dropHint}>Archivo listo para evaluar</p>
-                    <button style={s.clearBtn}
-                      onClick={() => { setArchivo(null); setArchivoTexto(''); }}>
+                    <button style={s.clearBtn} onClick={() => { setArchivo(null); setArchivoTexto(''); }}>
                       Quitar archivo
                     </button>
                   </div>
                 ) : (
                   <div style={s.dropContent}>
                     <span style={{ fontSize: '48px' }}>{dragging ? '📂' : '📄'}</span>
-                    <p style={s.dropText}>
-                      {dragging ? 'Suelta el archivo aquí' : 'Arrastra tu PDF aquí'}
-                    </p>
+                    <p style={s.dropText}>{dragging ? 'Suelta el archivo aquí' : 'Arrastra tu PDF aquí'}</p>
                     <p style={s.dropHint}>o haz clic para seleccionar</p>
                     <label style={s.selectFileBtn}>
                       Seleccionar PDF
@@ -327,10 +405,8 @@ export default function CursoAlumno() {
               </div>
             )}
 
-            {/* Textarea texto */}
             {tabActivo === 'texto' && (
-              <textarea
-                style={s.textarea}
+              <textarea style={s.textarea}
                 placeholder="Escribe o pega el contenido de tu trabajo aquí..."
                 value={form.texto}
                 onChange={e => setForm(f => ({ ...f, texto: e.target.value }))}
@@ -343,14 +419,12 @@ export default function CursoAlumno() {
             {enviando && (
               <div style={s.evaluandoMsg}>
                 <div style={s.spinner} />
-                Evaluando con IA... esto puede tardar unos segundos
+                Evaluando con IA{actividadSeleccionada?.enunciadoTexto ? ' (usando enunciado del docente)' : ''}... esto puede tardar unos segundos
               </div>
             )}
 
             <div style={{ display: 'flex', gap: '12px', marginTop: '20px' }}>
-              <button style={s.secondaryBtn} onClick={() => { setShowForm(false); resetForm(); }}>
-                Cancelar
-              </button>
+              <button style={s.secondaryBtn} onClick={() => { setShowForm(false); resetForm(); }}>Cancelar</button>
               <button style={s.primaryBtn} onClick={handleEnviar} disabled={enviando}>
                 {enviando ? 'Evaluando...' : '🚀 Enviar y evaluar con IA'}
               </button>
@@ -368,6 +442,7 @@ export default function CursoAlumno() {
                 <h2 style={s.modalTitle}>{entregaSeleccionada.titulo}</h2>
                 <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '13px', margin: 0 }}>
                   {entregaSeleccionada.tipoEvaluacion} · {entregaSeleccionada.rubricaNombre}
+                  {entregaSeleccionada.actividadTitulo && ` · ${entregaSeleccionada.actividadTitulo}`}
                 </p>
               </div>
               <button style={s.closeBtn} onClick={() => setEntregaSeleccionada(null)}>✕</button>
@@ -375,8 +450,7 @@ export default function CursoAlumno() {
 
             <div style={{ textAlign: 'center', padding: '20px 0', borderBottom: '1px solid rgba(255,255,255,0.06)', marginBottom: '20px' }}>
               <div style={{ fontSize: '56px', fontWeight: '800', color: nivelColor(entregaSeleccionada.notaFinal) }}>
-                {entregaSeleccionada.notaFinal}
-                <span style={{ fontSize: '22px', opacity: 0.5 }}>/20</span>
+                {entregaSeleccionada.notaFinal}<span style={{ fontSize: '22px', opacity: 0.5 }}>/20</span>
               </div>
               <div style={{ color: nivelColor(entregaSeleccionada.notaFinal), fontWeight: '600', fontSize: '18px' }}>
                 {entregaSeleccionada.nivelGlobal}
@@ -392,12 +466,7 @@ export default function CursoAlumno() {
                   </span>
                 </div>
                 <div style={{ height: '6px', background: 'rgba(255,255,255,0.08)', borderRadius: '3px', overflow: 'hidden' }}>
-                  <div style={{
-                    height: '100%',
-                    width: `${(c.puntajeObtenido / c.puntajeMaximo) * 100}%`,
-                    background: nivelColor(c.puntajeObtenido / c.puntajeMaximo * 20),
-                    borderRadius: '3px'
-                  }} />
+                  <div style={{ height: '100%', width: `${(c.puntajeObtenido / c.puntajeMaximo) * 100}%`, background: nivelColor(c.puntajeObtenido / c.puntajeMaximo * 20), borderRadius: '3px' }} />
                 </div>
                 <p style={{ color: 'rgba(255,255,255,0.45)', fontSize: '12px', margin: '4px 0 0', lineHeight: '1.4' }}>{c.comentario}</p>
               </div>
@@ -440,8 +509,7 @@ export default function CursoAlumno() {
               </div>
             )}
 
-            <button style={{ ...s.primaryBtn, width: '100%', marginTop: '20px' }}
-              onClick={() => setEntregaSeleccionada(null)}>
+            <button style={{ ...s.primaryBtn, width: '100%', marginTop: '20px' }} onClick={() => setEntregaSeleccionada(null)}>
               Cerrar
             </button>
           </div>
@@ -466,6 +534,17 @@ const s = {
   pesoPct: { color: '#a78bfa', fontSize: '18px', fontWeight: '700', margin: '0 0 6px' },
   pesoNota: { fontSize: '20px', fontWeight: '700', margin: '0 0 4px' },
   pesoCount: { color: 'rgba(255,255,255,0.3)', fontSize: '11px', margin: 0 },
+  pesoActs: { color: '#667eea', fontSize: '11px', margin: '4px 0 0' },
+  // Actividades section
+  actividadesSection: { marginBottom: '24px' },
+  actividadesTitle: { color: '#fff', fontSize: '16px', fontWeight: '600', margin: '0 0 12px' },
+  actividadesGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '12px' },
+  actividadCard: { background: 'rgba(102,126,234,0.08)', borderRadius: '14px', padding: '18px', border: '1px solid rgba(102,126,234,0.2)', display: 'flex', flexDirection: 'column', gap: '6px' },
+  actTitulo: { color: '#fff', fontSize: '14px', fontWeight: '600', flex: 1 },
+  actTipoBadge: { background: 'rgba(167,139,250,0.15)', color: '#a78bfa', padding: '2px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: '600', flexShrink: 0 },
+  actDesc: { color: 'rgba(255,255,255,0.5)', fontSize: '12px', margin: 0, lineHeight: '1.4' },
+  actArchivo: { color: '#22c55e', fontSize: '11px', margin: 0 },
+  responderBtn: { marginTop: '8px', padding: '9px 16px', borderRadius: '10px', background: 'linear-gradient(135deg, #667eea, #764ba2)', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: '600', fontSize: '13px' },
   primaryBtn: { padding: '12px 24px', borderRadius: '12px', background: 'linear-gradient(135deg, #667eea, #764ba2)', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: '600', fontSize: '14px' },
   secondaryBtn: { padding: '12px 24px', borderRadius: '12px', background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.7)', border: '1px solid rgba(255,255,255,0.12)', cursor: 'pointer', fontSize: '14px' },
   tipoSection: { marginBottom: '28px' },
@@ -478,6 +557,7 @@ const s = {
   entregaTop: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px', marginBottom: '6px' },
   entregaTitulo: { color: '#fff', fontSize: '14px', fontWeight: '500', flex: 1 },
   estadoBadge: { padding: '3px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: '700', flexShrink: 0 },
+  actividadTag: { color: '#a78bfa', fontSize: '11px', margin: '0 0 2px' },
   archivoTag: { color: 'rgba(255,255,255,0.35)', fontSize: '11px', margin: '0 0 4px' },
   entregaNivel: { color: 'rgba(255,255,255,0.45)', fontSize: '12px', margin: '0 0 4px' },
   entregaFecha: { color: 'rgba(255,255,255,0.3)', fontSize: '11px', margin: 0 },
@@ -487,6 +567,10 @@ const s = {
   modalHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px' },
   modalTitle: { color: '#fff', fontSize: '18px', fontWeight: '700', margin: '0 0 4px' },
   closeBtn: { background: 'rgba(255,255,255,0.08)', border: 'none', color: 'rgba(255,255,255,0.6)', cursor: 'pointer', fontSize: '16px', width: '32px', height: '32px', borderRadius: '8px', flexShrink: 0 },
+  actividadInfoBox: { background: 'rgba(102,126,234,0.1)', border: '1px solid rgba(102,126,234,0.25)', borderRadius: '12px', padding: '14px 16px', marginBottom: '16px' },
+  actividadInfoLabel: { color: '#a78bfa', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 4px' },
+  actividadInfoTitulo: { color: '#fff', fontSize: '15px', fontWeight: '600', margin: '0 0 4px' },
+  actividadInfoDesc: { color: 'rgba(255,255,255,0.5)', fontSize: '13px', margin: 0, lineHeight: '1.4' },
   grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' },
   label: { display: 'block', color: 'rgba(255,255,255,0.6)', fontSize: '13px', fontWeight: '500', marginBottom: '8px' },
   input: { width: '100%', padding: '11px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.06)', color: '#fff', fontSize: '14px', outline: 'none', boxSizing: 'border-box' },
@@ -494,12 +578,7 @@ const s = {
   tabs: { display: 'flex', background: 'rgba(255,255,255,0.06)', borderRadius: '10px', padding: '4px', marginBottom: '16px', gap: '4px' },
   tab: { flex: 1, padding: '10px', borderRadius: '8px', border: 'none', background: 'transparent', color: 'rgba(255,255,255,0.5)', fontSize: '14px', fontWeight: '500', cursor: 'pointer' },
   tabActivo: { background: 'rgba(255,255,255,0.1)', color: '#fff', fontWeight: '600' },
-  dropZone: {
-    border: '2px dashed rgba(102,126,234,0.35)', borderRadius: '16px',
-    padding: '40px 20px', textAlign: 'center', cursor: 'pointer',
-    background: 'rgba(102,126,234,0.04)', marginBottom: '16px',
-    transition: 'all 0.2s',
-  },
+  dropZone: { border: '2px dashed rgba(102,126,234,0.35)', borderRadius: '16px', padding: '40px 20px', textAlign: 'center', cursor: 'pointer', background: 'rgba(102,126,234,0.04)', marginBottom: '16px', transition: 'all 0.2s' },
   dropZoneActive: { border: '2px dashed #667eea', background: 'rgba(102,126,234,0.12)' },
   dropZoneDone: { border: '2px solid rgba(34,197,94,0.4)', background: 'rgba(34,197,94,0.06)' },
   dropContent: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' },
