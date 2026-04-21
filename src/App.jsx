@@ -3,7 +3,6 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './components/AuthContext.jsx';
 import Login from './pages/Login.jsx';
 import DashboardDocente from './pages/DashboardDocente.jsx';
-import EvaluarTrabajo from './pages/EvaluarTrabajo.jsx';
 import GestionRubricas from './pages/GestionRubricas.jsx';
 import GestionAlumnos from './pages/GestionAlumnos.jsx';
 import GestionCursos from './pages/GestionCursos.jsx';
@@ -41,16 +40,12 @@ export default function App() {
     <AuthProvider>
       <BrowserRouter>
         <Routes>
-          {/* Público */}
           <Route path="/login" element={<Login />} />
           <Route path="/" element={<RootRedirect />} />
 
           {/* ── DOCENTE ── */}
           <Route path="/dashboard" element={
             <PrivateRoute allowedRole="docente"><DashboardDocente /></PrivateRoute>
-          } />
-          <Route path="/evaluar" element={
-            <PrivateRoute allowedRole="docente"><EvaluarTrabajo /></PrivateRoute>
           } />
           <Route path="/rubricas" element={
             <PrivateRoute allowedRole="docente"><GestionRubricas /></PrivateRoute>
@@ -73,7 +68,6 @@ export default function App() {
             <PrivateRoute allowedRole="alumno"><UnirseACurso /></PrivateRoute>
           } />
 
-          {/* Fallback */}
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </BrowserRouter>

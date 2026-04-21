@@ -91,12 +91,11 @@ export default function DashboardDocente() {
         <div style={styles.sidebarLogo}>🎓 AcademIA</div>
         <nav style={styles.nav}>
           {[
-            { id: 'dashboard',       icon: '📊', label: 'Dashboard' },
-            { id: 'evaluar',         icon: '✏️', label: 'Evaluar Trabajo' },
-            { id: 'rubricas',        icon: '📋', label: 'Rúbricas' },
-            { id: 'cursos',          icon: '📚', label: 'Cursos' },
-            { id: 'alumnos',         icon: '👥', label: 'Alumnos' },
-            { id: 'reportes',        icon: '📈', label: 'Reportes' },
+            { id: 'dashboard', icon: '📊', label: 'Dashboard' },
+            { id: 'rubricas',  icon: '📋', label: 'Rúbricas' },
+            { id: 'cursos',    icon: '📚', label: 'Cursos' },
+            { id: 'alumnos',   icon: '👥', label: 'Alumnos' },
+            { id: 'reportes',  icon: '📈', label: 'Reportes' },
           ].map(item => (
             <button
               key={item.id}
@@ -110,19 +109,19 @@ export default function DashboardDocente() {
         <button onClick={handleLogout} style={styles.logoutBtn}>🚪 Cerrar sesión</button>
       </aside>
 
-      {/* Main content */}
+      {/* Main */}
       <main style={styles.main}>
         <header style={styles.header}>
           <div>
             <h1 style={styles.pageTitle}>Dashboard</h1>
             <p style={styles.pageSubtitle}>Bienvenido, {userData?.nombre || 'Docente'}</p>
           </div>
-          <button style={styles.ctaBtn} onClick={() => navigate('/evaluar')}>
-            + Nueva Evaluación
+          {/* ✅ Botón ahora lleva a Cursos, no a Evaluar */}
+          <button style={styles.ctaBtn} onClick={() => navigate('/cursos')}>
+            📚 Ir a mis cursos
           </button>
         </header>
 
-        {/* Stats Grid */}
         <div style={styles.statsGrid}>
           {[
             { label: 'Total Evaluaciones', value: stats.total,            icon: '📝', color: '#667eea' },
@@ -138,7 +137,6 @@ export default function DashboardDocente() {
           ))}
         </div>
 
-        {/* Charts */}
         <div style={styles.chartsGrid}>
           <div style={styles.chartCard}>
             <h3 style={styles.chartTitle}>Distribución de Notas</h3>
@@ -150,7 +148,6 @@ export default function DashboardDocente() {
           </div>
         </div>
 
-        {/* Recent evaluations table */}
         <div style={styles.tableCard}>
           <h3 style={styles.chartTitle}>Evaluaciones Recientes</h3>
           <div style={{ overflowX: 'auto' }}>
@@ -166,7 +163,7 @@ export default function DashboardDocente() {
                 {evaluaciones.slice(0, 8).map((ev, i) => (
                   <tr key={i} style={styles.tr}>
                     <td style={styles.td}>{ev.alumnoNombre || '—'}</td>
-                    <td style={styles.td}>{ev.tema || '—'}</td>
+                    <td style={styles.td}>{ev.titulo || ev.tema || '—'}</td>
                     <td style={styles.td}>{ev.cursoNombre || '—'}</td>
                     <td style={styles.td}>
                       <span style={{
@@ -200,49 +197,26 @@ export default function DashboardDocente() {
 const styles = {
   container: { display: 'flex', minHeight: '100vh', background: '#0f0c29', fontFamily: "'Segoe UI', sans-serif" },
   loading: { color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', fontSize: '18px' },
-  sidebar: {
-    width: '240px', background: 'rgba(255,255,255,0.04)', borderRight: '1px solid rgba(255,255,255,0.08)',
-    padding: '32px 16px', display: 'flex', flexDirection: 'column', gap: '8px', flexShrink: 0,
-  },
+  sidebar: { width: '240px', background: 'rgba(255,255,255,0.04)', borderRight: '1px solid rgba(255,255,255,0.08)', padding: '32px 16px', display: 'flex', flexDirection: 'column', gap: '8px', flexShrink: 0 },
   sidebarLogo: { color: '#fff', fontSize: '20px', fontWeight: '700', padding: '0 12px 24px' },
   nav: { display: 'flex', flexDirection: 'column', gap: '4px', flex: 1 },
-  navItem: {
-    display: 'flex', gap: '12px', alignItems: 'center', padding: '12px 16px', borderRadius: '12px',
-    color: 'rgba(255,255,255,0.5)', background: 'transparent', border: 'none', cursor: 'pointer',
-    fontSize: '14px', fontWeight: '500', textAlign: 'left', transition: 'all 0.2s',
-  },
+  navItem: { display: 'flex', gap: '12px', alignItems: 'center', padding: '12px 16px', borderRadius: '12px', color: 'rgba(255,255,255,0.5)', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '14px', fontWeight: '500', textAlign: 'left', transition: 'all 0.2s' },
   navItemActive: { background: 'rgba(102,126,234,0.2)', color: '#a78bfa' },
-  logoutBtn: {
-    display: 'flex', gap: '8px', alignItems: 'center', padding: '12px 16px', borderRadius: '12px',
-    color: 'rgba(255,255,255,0.4)', background: 'transparent', border: '1px solid rgba(255,255,255,0.08)',
-    cursor: 'pointer', fontSize: '14px', marginTop: 'auto',
-  },
+  logoutBtn: { display: 'flex', gap: '8px', alignItems: 'center', padding: '12px 16px', borderRadius: '12px', color: 'rgba(255,255,255,0.4)', background: 'transparent', border: '1px solid rgba(255,255,255,0.08)', cursor: 'pointer', fontSize: '14px', marginTop: 'auto' },
   main: { flex: 1, padding: '40px', overflowY: 'auto' },
   header: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '36px' },
   pageTitle: { color: '#fff', fontSize: '28px', fontWeight: '700', margin: '0 0 4px' },
   pageSubtitle: { color: 'rgba(255,255,255,0.4)', fontSize: '14px', margin: 0 },
-  ctaBtn: {
-    padding: '12px 24px', borderRadius: '12px', background: 'linear-gradient(135deg, #667eea, #764ba2)',
-    color: '#fff', border: 'none', cursor: 'pointer', fontWeight: '600', fontSize: '14px',
-  },
+  ctaBtn: { padding: '12px 24px', borderRadius: '12px', background: 'linear-gradient(135deg, #667eea, #764ba2)', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: '600', fontSize: '14px' },
   statsGrid: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '24px' },
-  statCard: {
-    background: 'rgba(255,255,255,0.04)', borderRadius: '16px', padding: '24px',
-    border: '1px solid rgba(255,255,255,0.08)',
-  },
+  statCard: { background: 'rgba(255,255,255,0.04)', borderRadius: '16px', padding: '24px', border: '1px solid rgba(255,255,255,0.08)' },
   statIcon: { fontSize: '24px', marginBottom: '12px' },
   statValue: { fontSize: '32px', fontWeight: '700', marginBottom: '4px' },
   statLabel: { color: 'rgba(255,255,255,0.4)', fontSize: '13px' },
   chartsGrid: { display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '16px', marginBottom: '24px' },
-  chartCard: {
-    background: 'rgba(255,255,255,0.04)', borderRadius: '16px', padding: '24px',
-    border: '1px solid rgba(255,255,255,0.08)',
-  },
+  chartCard: { background: 'rgba(255,255,255,0.04)', borderRadius: '16px', padding: '24px', border: '1px solid rgba(255,255,255,0.08)' },
   chartTitle: { color: '#fff', fontSize: '16px', fontWeight: '600', margin: '0 0 20px' },
-  tableCard: {
-    background: 'rgba(255,255,255,0.04)', borderRadius: '16px', padding: '24px',
-    border: '1px solid rgba(255,255,255,0.08)',
-  },
+  tableCard: { background: 'rgba(255,255,255,0.04)', borderRadius: '16px', padding: '24px', border: '1px solid rgba(255,255,255,0.08)' },
   table: { width: '100%', borderCollapse: 'collapse' },
   th: { color: 'rgba(255,255,255,0.4)', fontSize: '12px', fontWeight: '600', textAlign: 'left', padding: '8px 12px', textTransform: 'uppercase', letterSpacing: '0.05em' },
   tr: { borderBottom: '1px solid rgba(255,255,255,0.05)' },
