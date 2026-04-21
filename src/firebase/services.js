@@ -17,11 +17,7 @@ export const registerUser = async (email, password, displayName, role = 'alumno'
   const cred = await createUserWithEmailAndPassword(auth, email, password);
   await updateProfile(cred.user, { displayName });
   await addDoc(collection(db, 'usuarios'), {
-    uid: cred.user.uid,
-    email,
-    nombre: displayName,
-    rol: role,
-    creadoEn: serverTimestamp(),
+    uid: cred.user.uid, email, nombre: displayName, rol: role, creadoEn: serverTimestamp(),
   });
   return cred.user;
 };
@@ -46,10 +42,7 @@ export const getAllAlumnos = async () => {
 // ─── CURSOS ──────────────────────────────────────────────────────────────────
 
 export const crearCurso = async (datos) => {
-  const ref = await addDoc(collection(db, 'cursos'), {
-    ...datos,
-    creadoEn: serverTimestamp(),
-  });
+  const ref = await addDoc(collection(db, 'cursos'), { ...datos, creadoEn: serverTimestamp() });
   return { id: ref.id };
 };
 
@@ -64,14 +57,12 @@ export const getCursosByDocente = async (docenteUid) => {
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 };
 
-// ✅ FIX: movida aquí, después de los imports (antes estaba encima del archivo)
 export const getCursoByCodigo = async (codigo) => {
   const q = query(collection(db, 'cursos'), where('codigo', '==', codigo.toUpperCase()));
   const snap = await getDocs(q);
   return snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
 };
 
-// Buscar cursos por código + nombre docente (búsqueda flexible)
 export const buscarCursos = async ({ nombre, docenteNombre, seccion }) => {
   const snap = await getDocs(collection(db, 'cursos'));
   const todos = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -88,8 +79,34 @@ export const getCurso = async (id) => {
   return snap.exists() ? { id: snap.id, ...snap.data() } : null;
 };
 
-export const actualizarCurso = (id, datos) =>
-  updateDoc(doc(db, 'cursos', id), datos);
+export const actualizarCurso = (id, datos) => updateDoc(doc(db, 'cursos', id), datos);
+
+// ─── ACTIVIDADES ─────────────────────────────────────────────────────────────
+// Una actividad es una tarea/examen/práctica que el docente publica con su enunciado.
+// El alumno la ve, sube su trabajo y se evalúa automáticamente con ese enunciado.
+
+export const crearActividad = async (actividad) => {
+  const ref = await addDoc(collection(db, 'actividades'), {
+    ...actividad,
+    creadoEn: serverTimestamp(),
+  });
+  return { id: ref.id };
+};
+
+export const getActividadesByCurso = async (cursoId) => {
+  const q = query(
+    collection(db, 'actividades'),
+    where('cursoId', '==', cursoId),
+    orderBy('creadoEn', 'desc')
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+};
+
+export const getActividad = async (id) => {
+  const snap = await getDoc(doc(db, 'actividades', id));
+  return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+};
 
 // ─── MATRÍCULAS ──────────────────────────────────────────────────────────────
 
@@ -102,20 +119,15 @@ export const solicitarMatricula = async (alumnoUid, alumnoNombre, alumnoEmail, c
     return { id: snap.docs[0].id, estado: snap.docs[0].data().estado, yaExiste: true };
   }
   const ref = await addDoc(collection(db, 'matriculas'), {
-    alumnoUid,
-    alumnoNombre,
-    alumnoEmail,
-    cursoId,
-    estado: 'pendiente',
-    creadoEn: serverTimestamp(),
+    alumnoUid, alumnoNombre, alumnoEmail, cursoId,
+    estado: 'pendiente', creadoEn: serverTimestamp(),
   });
   return { id: ref.id, estado: 'pendiente', yaExiste: false };
 };
 
 export const aprobarMatricula = (matriculaId) =>
   updateDoc(doc(db, 'matriculas', matriculaId), {
-    estado: 'aprobado',
-    aprobadoEn: serverTimestamp(),
+    estado: 'aprobado', aprobadoEn: serverTimestamp(),
   });
 
 export const rechazarMatricula = (matriculaId) =>
@@ -162,10 +174,7 @@ export const getRubrica = async (id) => {
 // ─── ENTREGAS ────────────────────────────────────────────────────────────────
 
 export const crearEntrega = (entrega) =>
-  addDoc(collection(db, 'entregas'), {
-    ...entrega,
-    creadoEn: serverTimestamp(),
-  });
+  addDoc(collection(db, 'entregas'), { ...entrega, creadoEn: serverTimestamp() });
 
 export const getEntregasByAlumnoYCurso = async (alumnoUid, cursoId) => {
   const q = query(collection(db, 'entregas'),
@@ -187,10 +196,7 @@ export const actualizarEntrega = (id, datos) =>
 // ─── EVALUACIONES (legado) ───────────────────────────────────────────────────
 
 export const guardarEvaluacion = (evaluacion) =>
-  addDoc(collection(db, 'evaluaciones'), {
-    ...evaluacion,
-    creadoEn: serverTimestamp(),
-  });
+  addDoc(collection(db, 'evaluaciones'), { ...evaluacion, creadoEn: serverTimestamp() });
 
 export const getEvaluacionesByAlumno = async (alumnoUid) => {
   const q = query(
@@ -213,9 +219,7 @@ export const calcularNotaFinal = (entregas, tiposEvaluacion) => {
   let notaFinal = 0;
   let pesoUsado = 0;
   for (const tipo of tiposEvaluacion) {
-    const ents = entregas.filter(e =>
-      e.tipoEvaluacion === tipo.nombre && e.estado === 'evaluado'
-    );
+    const ents = entregas.filter(e => e.tipoEvaluacion === tipo.nombre && e.estado === 'evaluado');
     if (ents.length === 0) continue;
     const prom = ents.reduce((s, e) => s + (e.notaFinal || 0), 0) / ents.length;
     notaFinal += prom * (tipo.peso / 100);
