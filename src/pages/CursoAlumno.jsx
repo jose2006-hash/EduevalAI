@@ -2,8 +2,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
-  getCurso, getEntregasByAlumnoYCurso, crearEntrega,
-  calcularNotaFinal, getRubricas, getActividadesByCurso
+  getCurso, getEntregasByAlumnoYCurso, crearEntrega, eliminarEntrega,
+  calcularNotaFinal, getRubricas, getActividadesByCurso,
+  getMatriculasByAlumno, eliminarMatricula,
 } from '../firebase/services.js';
 import { evaluarTrabajo } from '../openai/evaluador.js';
 import { useAuth } from '../components/AuthContext.jsx';
@@ -22,6 +23,7 @@ export default function CursoAlumno() {
   const [showForm, setShowForm] = useState(false);
   const [entregaSeleccionada, setEntregaSeleccionada] = useState(null);
   const [dragging, setDragging] = useState(false);
+  const [confirm, setConfirm] = useState(null); // { tipo: 'entrega'|'desmatricular', id, nombre }
 
   const [form, setForm] = useState({
     tipoEvaluacion: '', actividadId: '', titulo: '', texto: '', rubricaId: '',
@@ -51,42 +53,31 @@ export default function CursoAlumno() {
     setLoading(false);
   };
 
-  // Actividades filtradas por tipo seleccionado
   const actividadesFiltradas = form.tipoEvaluacion
     ? actividades.filter(a => a.tipoEvaluacion === form.tipoEvaluacion)
     : actividades;
 
-  // Cuando cambia el tipo de evaluación, resetear actividad seleccionada
   const handleTipoChange = (tipo) => {
     setForm(f => ({ ...f, tipoEvaluacion: tipo, actividadId: '', titulo: '' }));
     setActividadSeleccionada(null);
   };
 
-  // Cuando selecciona una actividad, pre-rellenar título y rúbrica
   const handleActividadChange = (id) => {
     const act = actividades.find(a => a.id === id);
     setActividadSeleccionada(act || null);
-    setForm(f => ({
-      ...f,
-      actividadId: id,
-      titulo: act ? act.titulo : '',
-      rubricaId: act?.rubricaId || f.rubricaId,
-    }));
+    setForm(f => ({ ...f, actividadId: id, titulo: act ? act.titulo : '', rubricaId: act?.rubricaId || f.rubricaId }));
   };
 
-  const leerPDF = (file) => {
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        const text = ev.target.result
-          .replace(/[^\x20-\x7E\xA0-\xFF\n]/g, ' ')
-          .replace(/\s{3,}/g, '\n')
-          .substring(0, 8000);
-        resolve(text);
-      };
-      reader.readAsText(file, 'latin1');
-    });
-  };
+  const leerPDF = (file) => new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = ev.target.result
+        .replace(/[^\x20-\x7E\xA0-\xFF\n]/g, ' ')
+        .replace(/\s{3,}/g, '\n').substring(0, 8000);
+      resolve(text);
+    };
+    reader.readAsText(file, 'latin1');
+  });
 
   const procesarArchivo = async (file) => {
     if (!file) return;
@@ -107,59 +98,70 @@ export default function CursoAlumno() {
     if (!textoFinal?.trim()) return setError('Sube un PDF o escribe el contenido de tu trabajo');
     if (!form.tipoEvaluacion) return setError('Selecciona el tipo de evaluación');
     if (!form.titulo.trim()) return setError('Ingresa un título para tu trabajo');
-
     setError(''); setEnviando(true); setMsg('');
     try {
-      // Determinar rúbrica: la de la actividad tiene prioridad
       const rubrica = rubricas.find(r => r.id === form.rubricaId) || rubricas[0];
-
-      // Enunciado de la actividad seleccionada (nuevo)
       const enunciadoTexto = actividadSeleccionada?.enunciadoTexto || '';
-
       let resultado = null;
       if (rubrica) {
         resultado = await evaluarTrabajo(
-          textoFinal,
-          rubrica,
-          curso.nombre,
-          form.titulo,
-          curso.silaboTexto || '',
-          enunciadoTexto           // ← pasa el enunciado al evaluador
+          textoFinal, rubrica, curso.nombre, form.titulo,
+          curso.silaboTexto || '', enunciadoTexto
         );
       }
-
       await crearEntrega({
-        alumnoUid: user.uid,
-        alumnoNombre: userData.nombre,
-        cursoId,
-        cursoNombre: curso.nombre,
+        alumnoUid: user.uid, alumnoNombre: userData.nombre,
+        cursoId, cursoNombre: curso.nombre,
         tipoEvaluacion: form.tipoEvaluacion,
         actividadId: form.actividadId || null,
         actividadTitulo: actividadSeleccionada?.titulo || null,
-        titulo: form.titulo,
-        texto: textoFinal,
+        titulo: form.titulo, texto: textoFinal,
         archivoNombre: archivo?.name || null,
-        rubricaId: rubrica?.id || null,
-        rubricaNombre: rubrica?.nombre || null,
+        rubricaId: rubrica?.id || null, rubricaNombre: rubrica?.nombre || null,
         estado: resultado ? 'evaluado' : 'pendiente',
         ...(resultado || {}),
       });
-
       setMsg('✅ Trabajo enviado y evaluado correctamente');
-      setShowForm(false);
-      resetForm();
-      await cargar();
+      setShowForm(false); resetForm(); await cargar();
     } catch (err) {
       setError('Error al evaluar: ' + err.message);
-    } finally {
-      setEnviando(false);
-    }
+    } finally { setEnviando(false); }
   };
 
   const resetForm = () => {
     setForm({ tipoEvaluacion: '', actividadId: '', titulo: '', texto: '', rubricaId: '' });
     setActividadSeleccionada(null);
     setArchivo(null); setArchivoTexto(''); setError(''); setTabActivo('pdf');
+  };
+
+  // ── Eliminar entrega ───────────────────────────────────────────────────────
+  const handleEliminarEntrega = (e) => {
+    setEntregaSeleccionada(null);
+    setConfirm({ tipo: 'entrega', id: e.id, nombre: e.titulo });
+  };
+
+  // ── Desmatricularse ────────────────────────────────────────────────────────
+  const handleDesmatricularse = async () => {
+    setConfirm({ tipo: 'desmatricular', id: null, nombre: curso?.nombre });
+  };
+
+  const ejecutarConfirm = async () => {
+    if (!confirm) return;
+    try {
+      if (confirm.tipo === 'entrega') {
+        await eliminarEntrega(confirm.id);
+        setMsg('✅ Entrega eliminada');
+        await cargar();
+      } else if (confirm.tipo === 'desmatricular') {
+        const mats = await getMatriculasByAlumno(user.uid);
+        const mat = mats.find(m => m.cursoId === cursoId);
+        if (mat) await eliminarMatricula(mat.id);
+        navigate('/mis-cursos');
+      }
+    } catch (err) {
+      setMsg('❌ Error: ' + err.message);
+    }
+    setConfirm(null);
   };
 
   const nivelColor = (nota) => {
@@ -190,11 +192,16 @@ export default function CursoAlumno() {
           <h1 style={s.title}>{curso?.nombre}</h1>
           <p style={s.subtitle}>{curso?.docenteNombre} · Sección {curso?.seccion} · {curso?.ciclo}</p>
         </div>
-        <div style={{ textAlign: 'right' }}>
-          <p style={s.notaLabel}>Nota final ponderada</p>
-          <p style={{ ...s.notaValue, color: nivelColor(notaFinal) }}>
-            {notaFinal !== null ? `${notaFinal}/20` : '—'}
-          </p>
+        <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px' }}>
+          <div>
+            <p style={s.notaLabel}>Nota final ponderada</p>
+            <p style={{ ...s.notaValue, color: nivelColor(notaFinal) }}>
+              {notaFinal !== null ? `${notaFinal}/20` : '—'}
+            </p>
+          </div>
+          <button style={s.desmatricularBtn} onClick={handleDesmatricularse}>
+            🚪 Salir del curso
+          </button>
         </div>
       </header>
 
@@ -212,9 +219,7 @@ export default function CursoAlumno() {
             <div key={i} style={s.pesoCard}>
               <p style={s.pesoNombre}>{t.nombre}</p>
               <p style={s.pesoPct}>{t.peso}%</p>
-              <p style={{ ...s.pesoNota, color: nivelColor(prom) }}>
-                {prom ? `${prom}/20` : '—'}
-              </p>
+              <p style={{ ...s.pesoNota, color: nivelColor(prom) }}>{prom ? `${prom}/20` : '—'}</p>
               <p style={s.pesoCount}>{ents.length} entrega{ents.length !== 1 ? 's' : ''}</p>
               {actsDelTipo.length > 0 && (
                 <p style={s.pesoActs}>{actsDelTipo.length} actividad{actsDelTipo.length !== 1 ? 'es' : ''}</p>
@@ -236,9 +241,7 @@ export default function CursoAlumno() {
                   <span style={s.actTipoBadge}>{a.tipoEvaluacion}</span>
                 </div>
                 {a.descripcion && <p style={s.actDesc}>{a.descripcion}</p>}
-                {a.enunciadoNombre && (
-                  <p style={s.actArchivo}>📄 Enunciado: {a.enunciadoNombre}</p>
-                )}
+                {a.enunciadoNombre && <p style={s.actArchivo}>📄 Enunciado: {a.enunciadoNombre}</p>}
                 <button style={s.responderBtn} onClick={() => {
                   setShowForm(true);
                   setForm(f => ({ ...f, tipoEvaluacion: a.tipoEvaluacion, actividadId: a.id, titulo: a.titulo, rubricaId: a.rubricaId || '' }));
@@ -285,10 +288,13 @@ export default function CursoAlumno() {
                     {e.actividadTitulo && <p style={s.actividadTag}>📋 {e.actividadTitulo}</p>}
                     {e.archivoNombre && <p style={s.archivoTag}>📄 {e.archivoNombre}</p>}
                     {e.nivelGlobal && <p style={s.entregaNivel}>{e.nivelGlobal}</p>}
-                    <p style={s.entregaFecha}>
-                      {e.creadoEn?.toDate?.()?.toLocaleDateString('es-PE') || '—'}
-                    </p>
-                    {e.estado === 'evaluado' && <p style={s.verDetalle}>Ver retroalimentación →</p>}
+                    <p style={s.entregaFecha}>{e.creadoEn?.toDate?.()?.toLocaleDateString('es-PE') || '—'}</p>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }}>
+                      {e.estado === 'evaluado' && <p style={{ ...s.verDetalle, margin: 0 }}>Ver retroalimentación →</p>}
+                      <button style={s.deleteEntregaBtn}
+                        onClick={ev => { ev.stopPropagation(); handleEliminarEntrega(e); }}
+                        title="Eliminar entrega">🗑</button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -296,6 +302,30 @@ export default function CursoAlumno() {
           </div>
         );
       })}
+
+      {/* ── Modal confirmación ── */}
+      {confirm && (
+        <div style={s.overlay}>
+          <div style={{ ...s.modal, maxWidth: '420px', textAlign: 'center' }}>
+            <p style={{ fontSize: '40px', margin: '0 0 12px' }}>⚠️</p>
+            <h3 style={{ color: '#fff', fontSize: '18px', margin: '0 0 8px' }}>
+              {confirm.tipo === 'entrega' ? 'Eliminar entrega' : 'Salir del curso'}
+            </h3>
+            <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '14px', margin: '0 0 24px', lineHeight: '1.5' }}>
+              {confirm.tipo === 'entrega'
+                ? <>¿Eliminar la entrega <strong style={{ color: '#fff' }}>"{confirm.nombre}"</strong>? No se puede deshacer.</>
+                : <>¿Deseas desmatricularte de <strong style={{ color: '#fff' }}>"{confirm.nombre}"</strong>? Perderás el acceso al curso.</>
+              }
+            </p>
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+              <button style={s.secondaryBtn} onClick={() => setConfirm(null)}>Cancelar</button>
+              <button style={s.dangerBtn} onClick={ejecutarConfirm}>
+                {confirm.tipo === 'entrega' ? 'Sí, eliminar' : 'Sí, salir'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal subir trabajo */}
       {showForm && (
@@ -305,15 +335,11 @@ export default function CursoAlumno() {
               <h2 style={s.modalTitle}>📝 Subir Trabajo</h2>
               <button style={s.closeBtn} onClick={() => { setShowForm(false); resetForm(); }}>✕</button>
             </div>
-
-            {/* Info actividad seleccionada */}
             {actividadSeleccionada && (
               <div style={s.actividadInfoBox}>
                 <p style={s.actividadInfoLabel}>📋 Actividad seleccionada</p>
                 <p style={s.actividadInfoTitulo}>{actividadSeleccionada.titulo}</p>
-                {actividadSeleccionada.descripcion && (
-                  <p style={s.actividadInfoDesc}>{actividadSeleccionada.descripcion}</p>
-                )}
+                {actividadSeleccionada.descripcion && <p style={s.actividadInfoDesc}>{actividadSeleccionada.descripcion}</p>}
                 {actividadSeleccionada.enunciadoNombre && (
                   <p style={{ color: '#22c55e', fontSize: '12px', margin: '4px 0 0' }}>
                     📄 Enunciado cargado: {actividadSeleccionada.enunciadoNombre}
@@ -321,12 +347,10 @@ export default function CursoAlumno() {
                 )}
               </div>
             )}
-
             <div style={s.grid2}>
               <div>
                 <label style={s.label}>Tipo de evaluación *</label>
-                <select style={s.select} value={form.tipoEvaluacion}
-                  onChange={e => handleTipoChange(e.target.value)}>
+                <select style={s.select} value={form.tipoEvaluacion} onChange={e => handleTipoChange(e.target.value)}>
                   <option value="">Seleccionar...</option>
                   {curso?.tiposEvaluacion?.map((t, i) => (
                     <option key={i} value={t.nombre}>{t.nombre} ({t.peso}%)</option>
@@ -336,23 +360,17 @@ export default function CursoAlumno() {
               <div>
                 <label style={s.label}>Actividad (opcional)</label>
                 <select style={s.select} value={form.actividadId}
-                  onChange={e => handleActividadChange(e.target.value)}
-                  disabled={!form.tipoEvaluacion}>
+                  onChange={e => handleActividadChange(e.target.value)} disabled={!form.tipoEvaluacion}>
                   <option value="">Sin actividad específica</option>
-                  {actividadesFiltradas.map(a => (
-                    <option key={a.id} value={a.id}>{a.titulo}</option>
-                  ))}
+                  {actividadesFiltradas.map(a => <option key={a.id} value={a.id}>{a.titulo}</option>)}
                 </select>
               </div>
             </div>
-
             <div style={s.grid2}>
               <div>
                 <label style={s.label}>Título del trabajo *</label>
-                <input style={s.input}
-                  placeholder="Ej: Tarea 1 - Introducción"
-                  value={form.titulo}
-                  onChange={e => setForm(f => ({ ...f, titulo: e.target.value }))} />
+                <input style={s.input} placeholder="Ej: Tarea 1 - Introducción"
+                  value={form.titulo} onChange={e => setForm(f => ({ ...f, titulo: e.target.value }))} />
               </div>
               <div>
                 <label style={s.label}>Rúbrica de evaluación</label>
@@ -363,23 +381,14 @@ export default function CursoAlumno() {
                 </select>
               </div>
             </div>
-
-            {/* Tabs PDF / Texto */}
             <div style={s.tabs}>
-              <button style={{ ...s.tab, ...(tabActivo === 'pdf' ? s.tabActivo : {}) }} onClick={() => setTabActivo('pdf')}>
-                📄 Subir PDF
-              </button>
-              <button style={{ ...s.tab, ...(tabActivo === 'texto' ? s.tabActivo : {}) }} onClick={() => setTabActivo('texto')}>
-                ✏️ Escribir texto
-              </button>
+              <button style={{ ...s.tab, ...(tabActivo === 'pdf' ? s.tabActivo : {}) }} onClick={() => setTabActivo('pdf')}>📄 Subir PDF</button>
+              <button style={{ ...s.tab, ...(tabActivo === 'texto' ? s.tabActivo : {}) }} onClick={() => setTabActivo('texto')}>✏️ Escribir texto</button>
             </div>
-
             {tabActivo === 'pdf' && (
-              <div
-                ref={dropRef}
+              <div ref={dropRef}
                 style={{ ...s.dropZone, ...(dragging ? s.dropZoneActive : {}), ...(archivo ? s.dropZoneDone : {}) }}
-                onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}
-              >
+                onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
                 {leyendo ? (
                   <div style={s.dropContent}><div style={s.spinner} /><p style={s.dropText}>Leyendo archivo...</p></div>
                 ) : archivo ? (
@@ -387,9 +396,7 @@ export default function CursoAlumno() {
                     <span style={{ fontSize: '40px' }}>✅</span>
                     <p style={{ ...s.dropText, color: '#22c55e' }}>{archivo.name}</p>
                     <p style={s.dropHint}>Archivo listo para evaluar</p>
-                    <button style={s.clearBtn} onClick={() => { setArchivo(null); setArchivoTexto(''); }}>
-                      Quitar archivo
-                    </button>
+                    <button style={s.clearBtn} onClick={() => { setArchivo(null); setArchivoTexto(''); }}>Quitar archivo</button>
                   </div>
                 ) : (
                   <div style={s.dropContent}>
@@ -404,25 +411,18 @@ export default function CursoAlumno() {
                 )}
               </div>
             )}
-
             {tabActivo === 'texto' && (
               <textarea style={s.textarea}
                 placeholder="Escribe o pega el contenido de tu trabajo aquí..."
-                value={form.texto}
-                onChange={e => setForm(f => ({ ...f, texto: e.target.value }))}
-                rows={12}
-              />
+                value={form.texto} onChange={e => setForm(f => ({ ...f, texto: e.target.value }))} rows={12} />
             )}
-
             {error && <p style={s.error}>{error}</p>}
-
             {enviando && (
               <div style={s.evaluandoMsg}>
                 <div style={s.spinner} />
-                Evaluando con IA{actividadSeleccionada?.enunciadoTexto ? ' (usando enunciado del docente)' : ''}... esto puede tardar unos segundos
+                Evaluando con IA{actividadSeleccionada?.enunciadoTexto ? ' (usando enunciado del docente)' : ''}...
               </div>
             )}
-
             <div style={{ display: 'flex', gap: '12px', marginTop: '20px' }}>
               <button style={s.secondaryBtn} onClick={() => { setShowForm(false); resetForm(); }}>Cancelar</button>
               <button style={s.primaryBtn} onClick={handleEnviar} disabled={enviando}>
@@ -445,7 +445,11 @@ export default function CursoAlumno() {
                   {entregaSeleccionada.actividadTitulo && ` · ${entregaSeleccionada.actividadTitulo}`}
                 </p>
               </div>
-              <button style={s.closeBtn} onClick={() => setEntregaSeleccionada(null)}>✕</button>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <button style={s.deleteEntregaBtn} title="Eliminar esta entrega"
+                  onClick={() => handleEliminarEntrega(entregaSeleccionada)}>🗑</button>
+                <button style={s.closeBtn} onClick={() => setEntregaSeleccionada(null)}>✕</button>
+              </div>
             </div>
 
             <div style={{ textAlign: 'center', padding: '20px 0', borderBottom: '1px solid rgba(255,255,255,0.06)', marginBottom: '20px' }}>
@@ -527,6 +531,7 @@ const s = {
   subtitle: { color: 'rgba(255,255,255,0.4)', fontSize: '13px', margin: 0 },
   notaLabel: { color: 'rgba(255,255,255,0.4)', fontSize: '11px', margin: '0 0 2px', textAlign: 'right' },
   notaValue: { fontSize: '32px', fontWeight: '800', margin: 0 },
+  desmatricularBtn: { padding: '7px 14px', borderRadius: '9px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.25)', color: '#ef4444', cursor: 'pointer', fontSize: '12px', fontWeight: '500' },
   successMsg: { color: '#22c55e', fontSize: '14px', marginBottom: '16px', background: 'rgba(34,197,94,0.1)', padding: '12px 16px', borderRadius: '10px', border: '1px solid rgba(34,197,94,0.2)' },
   pesosRow: { display: 'flex', gap: '12px', marginBottom: '24px', flexWrap: 'wrap' },
   pesoCard: { flex: 1, minWidth: '110px', background: 'rgba(255,255,255,0.04)', borderRadius: '12px', padding: '16px', border: '1px solid rgba(255,255,255,0.08)', textAlign: 'center' },
@@ -535,7 +540,6 @@ const s = {
   pesoNota: { fontSize: '20px', fontWeight: '700', margin: '0 0 4px' },
   pesoCount: { color: 'rgba(255,255,255,0.3)', fontSize: '11px', margin: 0 },
   pesoActs: { color: '#667eea', fontSize: '11px', margin: '4px 0 0' },
-  // Actividades section
   actividadesSection: { marginBottom: '24px' },
   actividadesTitle: { color: '#fff', fontSize: '16px', fontWeight: '600', margin: '0 0 12px' },
   actividadesGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '12px' },
@@ -547,6 +551,7 @@ const s = {
   responderBtn: { marginTop: '8px', padding: '9px 16px', borderRadius: '10px', background: 'linear-gradient(135deg, #667eea, #764ba2)', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: '600', fontSize: '13px' },
   primaryBtn: { padding: '12px 24px', borderRadius: '12px', background: 'linear-gradient(135deg, #667eea, #764ba2)', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: '600', fontSize: '14px' },
   secondaryBtn: { padding: '12px 24px', borderRadius: '12px', background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.7)', border: '1px solid rgba(255,255,255,0.12)', cursor: 'pointer', fontSize: '14px' },
+  dangerBtn: { padding: '12px 24px', borderRadius: '12px', background: 'rgba(239,68,68,0.2)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.4)', cursor: 'pointer', fontWeight: '600', fontSize: '14px' },
   tipoSection: { marginBottom: '28px' },
   tipoTitle: { color: '#fff', fontSize: '16px', fontWeight: '600', margin: '0 0 12px', display: 'flex', alignItems: 'center', gap: '10px' },
   tipoPeso: { background: 'rgba(167,139,250,0.15)', color: '#a78bfa', padding: '2px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: '500' },
@@ -562,6 +567,7 @@ const s = {
   entregaNivel: { color: 'rgba(255,255,255,0.45)', fontSize: '12px', margin: '0 0 4px' },
   entregaFecha: { color: 'rgba(255,255,255,0.3)', fontSize: '11px', margin: 0 },
   verDetalle: { color: '#a78bfa', fontSize: '12px', margin: '8px 0 0', fontWeight: '500' },
+  deleteEntregaBtn: { background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.2)', color: '#ef4444', borderRadius: '8px', cursor: 'pointer', padding: '4px 8px', fontSize: '13px', flexShrink: 0 },
   overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 1000, overflowY: 'auto', padding: '32px' },
   modal: { background: '#1a1535', borderRadius: '20px', padding: '32px', width: '100%', maxWidth: '680px', border: '1px solid rgba(255,255,255,0.1)' },
   modalHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px' },

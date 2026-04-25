@@ -1,7 +1,7 @@
 // src/firebase/services.js
 import {
   collection, doc, addDoc, getDoc, getDocs,
-  updateDoc, query, where, orderBy, serverTimestamp
+  updateDoc, deleteDoc, query, where, orderBy, serverTimestamp
 } from 'firebase/firestore';
 import {
   createUserWithEmailAndPassword,
@@ -81,14 +81,13 @@ export const getCurso = async (id) => {
 
 export const actualizarCurso = (id, datos) => updateDoc(doc(db, 'cursos', id), datos);
 
+export const eliminarCurso = (id) => deleteDoc(doc(db, 'cursos', id));
+
 // ─── ACTIVIDADES ─────────────────────────────────────────────────────────────
-// Una actividad es una tarea/examen/práctica que el docente publica con su enunciado.
-// El alumno la ve, sube su trabajo y se evalúa automáticamente con ese enunciado.
 
 export const crearActividad = async (actividad) => {
   const ref = await addDoc(collection(db, 'actividades'), {
-    ...actividad,
-    creadoEn: serverTimestamp(),
+    ...actividad, creadoEn: serverTimestamp(),
   });
   return { id: ref.id };
 };
@@ -107,6 +106,8 @@ export const getActividad = async (id) => {
   const snap = await getDoc(doc(db, 'actividades', id));
   return snap.exists() ? { id: snap.id, ...snap.data() } : null;
 };
+
+export const eliminarActividad = (id) => deleteDoc(doc(db, 'actividades', id));
 
 // ─── MATRÍCULAS ──────────────────────────────────────────────────────────────
 
@@ -132,6 +133,10 @@ export const aprobarMatricula = (matriculaId) =>
 
 export const rechazarMatricula = (matriculaId) =>
   updateDoc(doc(db, 'matriculas', matriculaId), { estado: 'rechazado' });
+
+// Docente expulsa alumno / Alumno se desmatricula
+export const eliminarMatricula = (matriculaId) =>
+  deleteDoc(doc(db, 'matriculas', matriculaId));
 
 export const getMatriculasByAlumno = async (alumnoUid) => {
   const q = query(collection(db, 'matriculas'), where('alumnoUid', '==', alumnoUid));
@@ -192,6 +197,8 @@ export const getEntregasByCurso = async (cursoId) => {
 
 export const actualizarEntrega = (id, datos) =>
   updateDoc(doc(db, 'entregas', id), { ...datos, evaluadoEn: serverTimestamp() });
+
+export const eliminarEntrega = (id) => deleteDoc(doc(db, 'entregas', id));
 
 // ─── EVALUACIONES (legado) ───────────────────────────────────────────────────
 

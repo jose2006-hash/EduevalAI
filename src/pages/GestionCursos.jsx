@@ -2,10 +2,10 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  getCursosByDocente, crearCurso,
+  getCursosByDocente, crearCurso, eliminarCurso,
   getMatriculasByCurso, getPendientesByCurso,
-  aprobarMatricula, rechazarMatricula,
-  crearActividad, getActividadesByCurso,
+  aprobarMatricula, rechazarMatricula, eliminarMatricula,
+  crearActividad, getActividadesByCurso, eliminarActividad,
   getRubricas,
 } from '../firebase/services.js';
 import { useAuth } from '../components/AuthContext.jsx';
@@ -27,9 +27,9 @@ export default function GestionCursos() {
   const [cursoPendientes, setCursoPendientes] = useState(null);
   const [pendientes, setPendientes] = useState([]);
   const [aprobados, setAprobados] = useState([]);
+  const [confirm, setConfirm] = useState(null); // { tipo, id, nombre }
 
-  // Estado para actividades
-  const [cursoActividades, setCursoActividades] = useState(null); // curso seleccionado para ver/crear actividades
+  const [cursoActividades, setCursoActividades] = useState(null);
   const [actividades, setActividades] = useState([]);
   const [rubricas, setRubricas] = useState([]);
   const [showActForm, setShowActForm] = useState(false);
@@ -43,8 +43,7 @@ export default function GestionCursos() {
 
   const [form, setForm] = useState({
     nombre: '', seccion: '', codigo: '', descripcion: '', ciclo: '',
-    silaboTexto: '', silaboNombre: '',
-    tiposEvaluacion: TIPOS_DEFAULT,
+    silaboTexto: '', silaboNombre: '', tiposEvaluacion: TIPOS_DEFAULT,
   });
   const [leyendoPDF, setLeyendoPDF] = useState(false);
 
@@ -65,14 +64,45 @@ export default function GestionCursos() {
     setAprobados(todos.filter(m => m.estado === 'aprobado'));
   };
 
-  const handleAprobar = async (id) => {
-    await aprobarMatricula(id);
-    await abrirSolicitudes(cursoPendientes);
+  const handleAprobar = async (id) => { await aprobarMatricula(id); await abrirSolicitudes(cursoPendientes); };
+  const handleRechazar = async (id) => { await rechazarMatricula(id); await abrirSolicitudes(cursoPendientes); };
+
+  // ── Expulsar alumno ────────────────────────────────────────────────────────
+  const handleExpulsarAlumno = (matricula) => {
+    setConfirm({ tipo: 'alumno', id: matricula.id, nombre: matricula.alumnoNombre });
   };
 
-  const handleRechazar = async (id) => {
-    await rechazarMatricula(id);
-    await abrirSolicitudes(cursoPendientes);
+  // ── Eliminar actividad ─────────────────────────────────────────────────────
+  const handleEliminarActividad = (act) => {
+    setConfirm({ tipo: 'actividad', id: act.id, nombre: act.titulo });
+  };
+
+  // ── Eliminar curso ─────────────────────────────────────────────────────────
+  const handleEliminarCurso = (curso) => {
+    setConfirm({ tipo: 'curso', id: curso.id, nombre: curso.nombre });
+  };
+
+  const ejecutarConfirm = async () => {
+    if (!confirm) return;
+    try {
+      if (confirm.tipo === 'alumno') {
+        await eliminarMatricula(confirm.id);
+        await abrirSolicitudes(cursoPendientes);
+        setMsg('✅ Alumno eliminado del curso');
+      } else if (confirm.tipo === 'actividad') {
+        await eliminarActividad(confirm.id);
+        const acts = await getActividadesByCurso(cursoActividades.id);
+        setActividades(acts);
+        setMsgAct('✅ Actividad eliminada');
+      } else if (confirm.tipo === 'curso') {
+        await eliminarCurso(confirm.id);
+        await cargarCursos();
+        setMsg('✅ Curso eliminado');
+      }
+    } catch (err) {
+      setMsg('❌ Error: ' + err.message);
+    }
+    setConfirm(null);
   };
 
   // ── Actividades ────────────────────────────────────────────────────────────
@@ -89,19 +119,16 @@ export default function GestionCursos() {
     setFormAct(f => ({ ...f, tipoEvaluacion: curso.tiposEvaluacion?.[0]?.nombre || '' }));
   };
 
-  const leerPDFActividad = (file) => {
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        const text = ev.target.result
-          .replace(/[^\x20-\x7E\xA0-\xFF\n]/g, ' ')
-          .replace(/\s{3,}/g, '\n')
-          .substring(0, 8000);
-        resolve(text);
-      };
-      reader.readAsText(file, 'latin1');
-    });
-  };
+  const leerPDFActividad = (file) => new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = ev.target.result
+        .replace(/[^\x20-\x7E\xA0-\xFF\n]/g, ' ')
+        .replace(/\s{3,}/g, '\n').substring(0, 8000);
+      resolve(text);
+    };
+    reader.readAsText(file, 'latin1');
+  });
 
   const handleEnunciadoPDF = async (e) => {
     const file = e.target.files[0];
@@ -117,8 +144,7 @@ export default function GestionCursos() {
     if (!formAct.tipoEvaluacion) return setMsgAct('❌ Selecciona el tipo de evaluación');
     if (!formAct.enunciadoTexto.trim() && !formAct.descripcion.trim())
       return setMsgAct('❌ Agrega una descripción o sube el enunciado en PDF');
-    setGuardandoAct(true);
-    setMsgAct('');
+    setGuardandoAct(true); setMsgAct('');
     try {
       await crearActividad({
         ...formAct,
@@ -139,7 +165,6 @@ export default function GestionCursos() {
     }
   };
 
-  // ── Curso form ─────────────────────────────────────────────────────────────
   const handleSilaboPDF = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -171,7 +196,7 @@ export default function GestionCursos() {
     setGuardando(true); setMsg('');
     try {
       await crearCurso({ ...form, docenteUid: userData.uid, docenteNombre: userData.nombre });
-      setMsg(`✅ Curso "${form.nombre} - Sección ${form.seccion}" creado exitosamente`);
+      setMsg(`✅ Curso "${form.nombre} - Sección ${form.seccion}" creado`);
       await cargarCursos();
       setShowForm(false);
       setForm({ nombre: '', seccion: '', codigo: '', descripcion: '', ciclo: '', silaboTexto: '', silaboNombre: '', tiposEvaluacion: TIPOS_DEFAULT });
@@ -201,8 +226,10 @@ export default function GestionCursos() {
           <div key={i} style={s.cursoCard}>
             <div style={s.cursoTop}>
               <span style={s.cursoIcon}>📚</span>
-              <div style={{ display: 'flex', gap: '6px' }}>
+              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                 {c.seccion && <span style={s.seccionBadge}>Sección {c.seccion}</span>}
+                <button style={s.deleteCursoBtn} title="Eliminar curso"
+                  onClick={() => handleEliminarCurso(c)}>🗑</button>
               </div>
             </div>
             <h3 style={s.cursoNombre}>{c.nombre}</h3>
@@ -218,7 +245,6 @@ export default function GestionCursos() {
               <p style={s.infoValue}>Código: <strong style={{ color: '#a78bfa' }}>{c.codigo}</strong> + nombre del profesor</p>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px' }}>
-              {/* Botón actividades — acción principal */}
               <button style={s.actividadesBtn} onClick={() => abrirActividades(c)}>
                 📝 Actividades y enunciados
               </button>
@@ -234,6 +260,28 @@ export default function GestionCursos() {
           </p>
         )}
       </div>
+
+      {/* ── Modal confirmación ── */}
+      {confirm && (
+        <div style={s.overlay}>
+          <div style={{ ...s.modal, maxWidth: '420px', textAlign: 'center' }}>
+            <p style={{ fontSize: '40px', margin: '0 0 12px' }}>⚠️</p>
+            <h3 style={{ color: '#fff', fontSize: '18px', margin: '0 0 8px' }}>
+              {confirm.tipo === 'alumno' ? 'Eliminar alumno' :
+               confirm.tipo === 'actividad' ? 'Eliminar actividad' : 'Eliminar curso'}
+            </h3>
+            <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '14px', margin: '0 0 24px', lineHeight: '1.5' }}>
+              ¿Estás seguro de que deseas eliminar <strong style={{ color: '#fff' }}>"{confirm.nombre}"</strong>?
+              {confirm.tipo === 'curso' && ' Esto no eliminará las entregas de los alumnos.'}
+              Esta acción no se puede deshacer.
+            </p>
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+              <button style={s.secondaryBtn} onClick={() => setConfirm(null)}>Cancelar</button>
+              <button style={s.dangerBtn} onClick={ejecutarConfirm}>Sí, eliminar</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Modal solicitudes ── */}
       {cursoPendientes && (
@@ -283,11 +331,15 @@ export default function GestionCursos() {
               ) : aprobados.map((m, i) => (
                 <div key={i} style={s.alumnoRowAprobado}>
                   <span style={s.alumnoAvatar}>👤</span>
-                  <div>
+                  <div style={{ flex: 1 }}>
                     <p style={s.alumnoNombre}>{m.alumnoNombre}</p>
                     <p style={s.alumnoEmail}>{m.alumnoEmail}</p>
                   </div>
-                  <span style={{ marginLeft: 'auto', color: '#22c55e', fontSize: '13px' }}>✓ Aprobado</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <span style={{ color: '#22c55e', fontSize: '13px' }}>✓ Aprobado</span>
+                    <button style={s.expulsarBtn} onClick={() => handleExpulsarAlumno(m)}
+                      title="Expulsar del curso">🗑</button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -317,7 +369,6 @@ export default function GestionCursos() {
               </div>
             )}
 
-            {/* Lista de actividades existentes */}
             {actividades.length > 0 && (
               <div style={{ marginBottom: '20px' }}>
                 <h3 style={{ color: 'rgba(255,255,255,0.6)', fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 12px' }}>
@@ -326,7 +377,7 @@ export default function GestionCursos() {
                 {actividades.map((a, i) => (
                   <div key={i} style={s.actividadRow}>
                     <div style={{ flex: 1 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', flexWrap: 'wrap' }}>
                         <span style={{ color: '#fff', fontWeight: '600', fontSize: '14px' }}>{a.titulo}</span>
                         <span style={s.tipoBadge}>{a.tipoEvaluacion}</span>
                         {a.enunciadoNombre && <span style={s.archivoBadge}>📄 {a.enunciadoNombre}</span>}
@@ -338,6 +389,9 @@ export default function GestionCursos() {
                         </p>
                       )}
                     </div>
+                    {/* Botón eliminar actividad */}
+                    <button style={s.expulsarBtn} title="Eliminar actividad"
+                      onClick={() => handleEliminarActividad(a)}>🗑</button>
                   </div>
                 ))}
               </div>
@@ -349,17 +403,14 @@ export default function GestionCursos() {
               </div>
             )}
 
-            {/* Formulario nueva actividad */}
             {showActForm ? (
               <div style={s.actForm}>
                 <h3 style={{ color: '#fff', fontSize: '15px', fontWeight: '600', margin: '0 0 16px' }}>Nueva actividad</h3>
-
                 <div style={s.grid2}>
                   <div>
                     <label style={s.label}>Título *</label>
                     <input style={s.input} placeholder="Ej: Práctica Calificada 1"
-                      value={formAct.titulo}
-                      onChange={e => setFormAct(f => ({ ...f, titulo: e.target.value }))} />
+                      value={formAct.titulo} onChange={e => setFormAct(f => ({ ...f, titulo: e.target.value }))} />
                   </div>
                   <div>
                     <label style={s.label}>Tipo de evaluación *</label>
@@ -372,18 +423,14 @@ export default function GestionCursos() {
                     </select>
                   </div>
                 </div>
-
                 <div style={{ marginBottom: '16px' }}>
                   <label style={s.label}>Descripción breve</label>
                   <input style={s.input} placeholder="Ej: Resolver los ejercicios de los temas 3 y 4"
-                    value={formAct.descripcion}
-                    onChange={e => setFormAct(f => ({ ...f, descripcion: e.target.value }))} />
+                    value={formAct.descripcion} onChange={e => setFormAct(f => ({ ...f, descripcion: e.target.value }))} />
                 </div>
-
-                {/* Enunciado PDF */}
                 <div style={s.enunciadoBox}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                    <label style={s.label}>📄 Enunciado / Guía de la actividad</label>
+                    <label style={s.label}>📄 Enunciado / Guía</label>
                     <label style={s.uploadBtn}>
                       {leyendoAct ? '⏳ Leyendo...' : formAct.enunciadoNombre ? `✅ ${formAct.enunciadoNombre}` : '📎 Subir PDF'}
                       <input type="file" accept=".pdf" style={{ display: 'none' }} onChange={handleEnunciadoPDF} />
@@ -392,18 +439,13 @@ export default function GestionCursos() {
                   <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px', margin: 0 }}>
                     La IA usará este enunciado para evaluar si el alumno respondió lo que se pidió
                   </p>
-                  {/* También se puede escribir directamente */}
                   {!formAct.enunciadoNombre && (
-                    <textarea
-                      style={{ ...s.textarea, marginTop: '10px', minHeight: '80px' }}
+                    <textarea style={{ ...s.textarea, marginTop: '10px', minHeight: '80px' }}
                       placeholder="O escribe el enunciado directamente aquí..."
                       value={formAct.enunciadoTexto}
-                      onChange={e => setFormAct(f => ({ ...f, enunciadoTexto: e.target.value }))}
-                    />
+                      onChange={e => setFormAct(f => ({ ...f, enunciadoTexto: e.target.value }))} />
                   )}
                 </div>
-
-                {/* Rúbrica */}
                 {rubricas.length > 0 && (
                   <div style={{ marginBottom: '16px' }}>
                     <label style={s.label}>Rúbrica de evaluación</label>
@@ -414,8 +456,7 @@ export default function GestionCursos() {
                     </select>
                   </div>
                 )}
-
-                <div style={{ display: 'flex', gap: '10px', marginTop: '4px' }}>
+                <div style={{ display: 'flex', gap: '10px' }}>
                   <button style={s.secondaryBtn} onClick={() => { setShowActForm(false); setMsgAct(''); }}>Cancelar</button>
                   <button style={s.primaryBtn} onClick={handleGuardarActividad} disabled={guardandoAct}>
                     {guardandoAct ? 'Publicando...' : '📢 Publicar actividad'}
@@ -439,7 +480,6 @@ export default function GestionCursos() {
               <h2 style={s.modalTitle}>Nuevo Curso</h2>
               <button style={s.closeBtn} onClick={() => setShowForm(false)}>✕</button>
             </div>
-
             <div style={s.grid3}>
               <div style={{ gridColumn: 'span 2' }}>
                 <label style={s.label}>Nombre del curso *</label>
@@ -452,15 +492,12 @@ export default function GestionCursos() {
                   value={form.seccion} onChange={e => setForm(f => ({ ...f, seccion: e.target.value.toUpperCase() }))} />
               </div>
             </div>
-
             <div style={s.grid2}>
               <div>
                 <label style={s.label}>Código del curso *</label>
                 <input style={s.input} placeholder="Ej: CONT-2024-A"
                   value={form.codigo} onChange={e => setForm(f => ({ ...f, codigo: e.target.value.toUpperCase() }))} />
-                <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px', marginTop: '6px' }}>
-                  Comparte este código con tus alumnos
-                </p>
+                <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px', marginTop: '6px' }}>Comparte este código con tus alumnos</p>
               </div>
               <div>
                 <label style={s.label}>Ciclo / Semestre</label>
@@ -468,13 +505,11 @@ export default function GestionCursos() {
                   value={form.ciclo} onChange={e => setForm(f => ({ ...f, ciclo: e.target.value }))} />
               </div>
             </div>
-
             <div style={{ marginBottom: '16px' }}>
               <label style={s.label}>Descripción</label>
               <input style={s.input} placeholder="Descripción breve"
                 value={form.descripcion} onChange={e => setForm(f => ({ ...f, descripcion: e.target.value }))} />
             </div>
-
             <div style={s.silaboBox}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                 <label style={s.label}>📄 Sílabo del curso</label>
@@ -483,11 +518,8 @@ export default function GestionCursos() {
                   <input type="file" accept=".pdf" style={{ display: 'none' }} onChange={handleSilaboPDF} />
                 </label>
               </div>
-              <p style={{ color: 'rgba(255,255,255,0.35)', fontSize: '12px', margin: 0 }}>
-                La IA usará el sílabo como referencia al evaluar trabajos
-              </p>
+              <p style={{ color: 'rgba(255,255,255,0.35)', fontSize: '12px', margin: 0 }}>La IA usará el sílabo como referencia al evaluar trabajos</p>
             </div>
-
             <div style={{ marginBottom: '20px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                 <label style={s.label}>Tipos de Evaluación y Pesos</label>
@@ -510,7 +542,6 @@ export default function GestionCursos() {
               <button onClick={() => setForm(f => ({ ...f, tiposEvaluacion: [...f.tiposEvaluacion, { nombre: '', peso: 0 }] }))}
                 style={s.addTipoBtn}>+ Agregar tipo</button>
             </div>
-
             <div style={{ display: 'flex', gap: '12px' }}>
               <button style={s.secondaryBtn} onClick={() => setShowForm(false)}>Cancelar</button>
               <button style={s.primaryBtn} onClick={handleGuardar} disabled={guardando}>
@@ -531,11 +562,13 @@ const s = {
   title: { color: '#fff', fontSize: '24px', fontWeight: '700', flex: 1, margin: 0 },
   primaryBtn: { padding: '12px 24px', borderRadius: '12px', background: 'linear-gradient(135deg, #667eea, #764ba2)', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: '600', fontSize: '14px' },
   secondaryBtn: { padding: '12px 24px', borderRadius: '12px', background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.7)', border: '1px solid rgba(255,255,255,0.12)', cursor: 'pointer', fontSize: '14px' },
+  dangerBtn: { padding: '12px 24px', borderRadius: '12px', background: 'rgba(239,68,68,0.2)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.4)', cursor: 'pointer', fontWeight: '600', fontSize: '14px' },
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '16px' },
   cursoCard: { background: 'rgba(255,255,255,0.04)', borderRadius: '16px', padding: '24px', border: '1px solid rgba(255,255,255,0.08)', display: 'flex', flexDirection: 'column', gap: '10px' },
   cursoTop: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
   cursoIcon: { fontSize: '28px' },
   seccionBadge: { background: 'rgba(167,139,250,0.15)', color: '#a78bfa', padding: '4px 12px', borderRadius: '8px', fontSize: '13px', fontWeight: '700' },
+  deleteCursoBtn: { background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.2)', color: '#ef4444', borderRadius: '8px', cursor: 'pointer', padding: '4px 8px', fontSize: '14px' },
   cursoNombre: { color: '#fff', fontSize: '18px', fontWeight: '600', margin: 0 },
   cursoCiclo: { color: 'rgba(255,255,255,0.4)', fontSize: '13px', margin: 0 },
   tiposList: { display: 'flex', flexWrap: 'wrap', gap: '6px' },
@@ -564,7 +597,7 @@ const s = {
   alumnoEmail: { color: 'rgba(255,255,255,0.4)', fontSize: '12px', margin: 0 },
   aprobarBtn: { padding: '8px 16px', borderRadius: '8px', background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', cursor: 'pointer', fontSize: '13px', fontWeight: '600' },
   rechazarBtn: { padding: '8px 16px', borderRadius: '8px', background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)', color: '#ef4444', cursor: 'pointer', fontSize: '13px', fontWeight: '600' },
-  // Actividades
+  expulsarBtn: { background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.2)', color: '#ef4444', borderRadius: '8px', cursor: 'pointer', padding: '6px 10px', fontSize: '14px', flexShrink: 0 },
   actividadRow: { display: 'flex', alignItems: 'flex-start', gap: '12px', background: 'rgba(102,126,234,0.06)', borderRadius: '12px', padding: '14px 16px', marginBottom: '8px', border: '1px solid rgba(102,126,234,0.15)' },
   tipoBadge: { background: 'rgba(167,139,250,0.15)', color: '#a78bfa', padding: '2px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: '600' },
   archivoBadge: { background: 'rgba(34,197,94,0.1)', color: '#22c55e', padding: '2px 8px', borderRadius: '6px', fontSize: '11px' },
@@ -572,7 +605,6 @@ const s = {
   actForm: { background: 'rgba(255,255,255,0.03)', borderRadius: '14px', padding: '20px', border: '1px solid rgba(255,255,255,0.08)' },
   enunciadoBox: { background: 'rgba(102,126,234,0.06)', border: '1px solid rgba(102,126,234,0.15)', borderRadius: '12px', padding: '16px', marginBottom: '16px' },
   textarea: { width: '100%', padding: '12px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.04)', color: '#fff', fontSize: '13px', outline: 'none', resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box', lineHeight: '1.5' },
-  // Curso form
   grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' },
   grid3: { display: 'grid', gridTemplateColumns: '1fr 1fr 120px', gap: '16px', marginBottom: '16px' },
   label: { display: 'block', color: 'rgba(255,255,255,0.6)', fontSize: '13px', fontWeight: '500', marginBottom: '8px' },
