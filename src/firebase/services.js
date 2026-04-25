@@ -39,6 +39,10 @@ export const getAllAlumnos = async () => {
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 };
 
+// Elimina el documento de Firestore del alumno (no la cuenta de Auth)
+export const eliminarAlumno = (documentId) =>
+  deleteDoc(doc(db, 'usuarios', documentId));
+
 // ─── CURSOS ──────────────────────────────────────────────────────────────────
 
 export const crearCurso = async (datos) => {
@@ -80,7 +84,6 @@ export const getCurso = async (id) => {
 };
 
 export const actualizarCurso = (id, datos) => updateDoc(doc(db, 'cursos', id), datos);
-
 export const eliminarCurso = (id) => deleteDoc(doc(db, 'cursos', id));
 
 // ─── ACTIVIDADES ─────────────────────────────────────────────────────────────
@@ -134,7 +137,6 @@ export const aprobarMatricula = (matriculaId) =>
 export const rechazarMatricula = (matriculaId) =>
   updateDoc(doc(db, 'matriculas', matriculaId), { estado: 'rechazado' });
 
-// Docente expulsa alumno / Alumno se desmatricula
 export const eliminarMatricula = (matriculaId) =>
   deleteDoc(doc(db, 'matriculas', matriculaId));
 
@@ -175,6 +177,8 @@ export const getRubrica = async (id) => {
   const snap = await getDoc(doc(db, 'rubricas', id));
   return snap.exists() ? { id: snap.id, ...snap.data() } : null;
 };
+
+export const eliminarRubrica = (id) => deleteDoc(doc(db, 'rubricas', id));
 
 // ─── ENTREGAS ────────────────────────────────────────────────────────────────
 

@@ -1,7 +1,7 @@
 // src/pages/GestionRubricas.jsx
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getRubricas, guardarRubrica, getCursos } from '../firebase/services.js';
+import { getRubricas, guardarRubrica, eliminarRubrica, getCursos } from '../firebase/services.js';
 
 const rubricaEjemplo = {
   nombre: 'Rúbrica: Trabajo de Investigación - Cálculo',
@@ -22,6 +22,7 @@ export default function GestionRubricas() {
   const [showForm, setShowForm] = useState(false);
   const [nueva, setNueva] = useState({ nombre: '', cursoId: '', puntajeTotal: 20, criterios: [] });
   const [guardando, setGuardando] = useState(false);
+  const [confirm, setConfirm] = useState(null); // { id, nombre }
 
   useEffect(() => {
     const load = async () => {
@@ -47,6 +48,10 @@ export default function GestionRubricas() {
     return { ...n, criterios: crs };
   });
 
+  const removeCriterio = (i) => setNueva(n => ({
+    ...n, criterios: n.criterios.filter((_, idx) => idx !== i)
+  }));
+
   const handleGuardar = async () => {
     setGuardando(true);
     try {
@@ -62,6 +67,17 @@ export default function GestionRubricas() {
     }
   };
 
+  const handleEliminar = async () => {
+    if (!confirm) return;
+    try {
+      await eliminarRubrica(confirm.id);
+      setRubricas(r => r.filter(x => x.id !== confirm.id));
+    } catch (e) {
+      alert('Error: ' + e.message);
+    }
+    setConfirm(null);
+  };
+
   const usarEjemplo = () => setNueva({ ...rubricaEjemplo, cursoId: cursos[0]?.id || '' });
 
   return (
@@ -72,11 +88,14 @@ export default function GestionRubricas() {
         <button style={styles.primaryBtn} onClick={() => setShowForm(true)}>+ Nueva Rúbrica</button>
       </header>
 
-      {/* Existing rubrics */}
       <div style={styles.grid}>
         {rubricas.map((r, i) => (
           <div key={i} style={styles.rubricaCard}>
-            <div style={styles.rubricaIcon}>📋</div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div style={styles.rubricaIcon}>📋</div>
+              <button style={styles.deleteBtn} title="Eliminar rúbrica"
+                onClick={() => setConfirm({ id: r.id, nombre: r.nombre })}>🗑</button>
+            </div>
             <h3 style={styles.rubricaNombre}>{r.nombre}</h3>
             <p style={styles.rubricaInfo}>
               {r.criterios?.length || 0} criterios · {r.puntajeTotal || 20} pts
@@ -96,7 +115,24 @@ export default function GestionRubricas() {
         )}
       </div>
 
-      {/* New rubric form */}
+      {/* ── Modal confirmación eliminar ── */}
+      {confirm && (
+        <div style={styles.overlay}>
+          <div style={{ ...styles.modal, maxWidth: '420px', textAlign: 'center' }}>
+            <p style={{ fontSize: '40px', margin: '0 0 12px' }}>⚠️</p>
+            <h3 style={{ color: '#fff', fontSize: '18px', margin: '0 0 8px' }}>Eliminar rúbrica</h3>
+            <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '14px', margin: '0 0 24px', lineHeight: '1.5' }}>
+              ¿Eliminar <strong style={{ color: '#fff' }}>"{confirm.nombre}"</strong>? Esta acción no se puede deshacer.
+            </p>
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+              <button style={styles.secondaryBtn} onClick={() => setConfirm(null)}>Cancelar</button>
+              <button style={styles.dangerBtn} onClick={handleEliminar}>Sí, eliminar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal nueva rúbrica ── */}
       {showForm && (
         <div style={styles.overlay}>
           <div style={styles.modal}>
@@ -133,8 +169,9 @@ export default function GestionRubricas() {
             <h3 style={styles.sectionTitle}>Criterios de Evaluación</h3>
             {nueva.criterios.map((c, i) => (
               <div key={i} style={styles.criterioForm}>
-                <div style={styles.criterioFormHeader}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                   <span style={styles.criterioNum}>Criterio {i + 1}</span>
+                  <button style={styles.deleteBtn} onClick={() => removeCriterio(i)} title="Quitar criterio">🗑</button>
                 </div>
                 <div style={styles.grid3}>
                   <div style={styles.field}>
@@ -194,6 +231,8 @@ const styles = {
   title: { color: '#fff', fontSize: '24px', fontWeight: '700', flex: 1, margin: 0 },
   primaryBtn: { padding: '12px 24px', borderRadius: '12px', background: 'linear-gradient(135deg, #667eea, #764ba2)', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: '600', fontSize: '14px' },
   secondaryBtn: { padding: '12px 24px', borderRadius: '12px', background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.7)', border: '1px solid rgba(255,255,255,0.12)', cursor: 'pointer', fontWeight: '500', fontSize: '14px' },
+  dangerBtn: { padding: '12px 24px', borderRadius: '12px', background: 'rgba(239,68,68,0.2)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.4)', cursor: 'pointer', fontWeight: '600', fontSize: '14px' },
+  deleteBtn: { background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.2)', color: '#ef4444', borderRadius: '8px', cursor: 'pointer', padding: '5px 9px', fontSize: '14px', flexShrink: 0 },
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '16px' },
   rubricaCard: { background: 'rgba(255,255,255,0.04)', borderRadius: '16px', padding: '24px', border: '1px solid rgba(255,255,255,0.08)' },
   rubricaIcon: { fontSize: '32px', marginBottom: '12px' },
@@ -217,7 +256,6 @@ const styles = {
   select: { width: '100%', padding: '12px 16px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(20,16,50,0.9)', color: '#fff', fontSize: '14px', outline: 'none', boxSizing: 'border-box' },
   sectionTitle: { color: '#fff', fontSize: '16px', fontWeight: '600', margin: '0 0 16px' },
   criterioForm: { background: 'rgba(255,255,255,0.03)', borderRadius: '12px', padding: '20px', marginBottom: '12px', border: '1px solid rgba(255,255,255,0.06)', display: 'flex', flexDirection: 'column', gap: '10px' },
-  criterioFormHeader: { marginBottom: '4px' },
   criterioNum: { color: '#a78bfa', fontSize: '13px', fontWeight: '600' },
   addCriterioBtn: { width: '100%', padding: '12px', borderRadius: '10px', border: '2px dashed rgba(102,126,234,0.3)', background: 'transparent', color: '#a78bfa', cursor: 'pointer', fontSize: '14px', marginTop: '8px' },
 };
