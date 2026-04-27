@@ -2,7 +2,7 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '../firebase/config.js';
-import { getUserData } from '../firebase/services.js';
+import { getUserData, crearUsuarioSiNoExiste } from '../firebase/services.js';
 
 const AuthContext = createContext(null);
 
@@ -15,7 +15,14 @@ export const AuthProvider = ({ children }) => {
     const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
       setUser(firebaseUser);
       if (firebaseUser) {
-        const data = await getUserData(firebaseUser.uid);
+        let data = await getUserData(firebaseUser.uid);
+
+        // Si no existe en Firestore (ej: login con Google por primera vez),
+        // lo creamos automáticamente como 'docente'
+        if (!data) {
+          data = await crearUsuarioSiNoExiste(firebaseUser);
+        }
+
         setUserData(data);
       } else {
         setUserData(null);

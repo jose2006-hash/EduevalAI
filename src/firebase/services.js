@@ -240,3 +240,24 @@ export const calcularNotaFinal = (entregas, tiposEvaluacion) => {
   if (pesoUsado < 100) notaFinal = notaFinal * (100 / pesoUsado);
   return Math.round(notaFinal * 10) / 10;
 };
+// ─── AGREGAR ESTA FUNCIÓN AL FINAL DE services.js ───────────────────────────
+
+export const crearUsuarioSiNoExiste = async (firebaseUser) => {
+  // Verifica una vez más que no exista
+  const existente = await getUserData(firebaseUser.uid);
+  if (existente) return existente;
+
+  // Crea el documento en Firestore
+  const nuevoUsuario = {
+    uid: firebaseUser.uid,
+    email: firebaseUser.email,
+    nombre: firebaseUser.displayName || firebaseUser.email,
+    rol: 'docente', // Por defecto docente para login con Google
+    creadoEn: serverTimestamp(),
+  };
+
+  await addDoc(collection(db, 'usuarios'), nuevoUsuario);
+
+  // Lo retorna sin el serverTimestamp (aún no resuelto)
+  return { ...nuevoUsuario, creadoEn: new Date() };
+};
