@@ -10,28 +10,44 @@ import MisCursos from './pages/MisCursos.jsx';
 import CursoAlumno from './pages/CursoAlumno.jsx';
 import UnirseACurso from './pages/UnirseACurso.jsx';
 
+const loadingScreen = (msg = 'Cargando...') => (
+  <div style={{
+    color: '#fff', display: 'flex', alignItems: 'center',
+    justifyContent: 'center', height: '100vh', background: '#0f0c29',
+    fontFamily: 'Segoe UI, sans-serif', fontSize: '16px'
+  }}>
+    {msg}
+  </div>
+);
+
 const PrivateRoute = ({ children, allowedRole }) => {
   const { user, userData, loading } = useAuth();
-  if (loading) return (
-    <div style={{
-      color: '#fff', display: 'flex', alignItems: 'center',
-      justifyContent: 'center', height: '100vh', background: '#0f0c29',
-      fontFamily: 'Segoe UI, sans-serif', fontSize: '16px'
-    }}>
-      Cargando...
-    </div>
-  );
+
+  // 1. Firebase aún inicializando
+  if (loading) return loadingScreen('Cargando...');
+
+  // 2. No hay sesión → login
   if (!user) return <Navigate to="/login" />;
-  if (allowedRole && userData?.rol !== allowedRole) {
-    return <Navigate to={userData?.rol === 'alumno' ? '/mis-cursos' : '/dashboard'} />;
+
+  // 3. Hay sesión pero userData todavía no llegó de Firestore → esperar
+  if (userData === null) return loadingScreen('Cargando perfil...');
+
+  // 4. Usuario sin rol válido en Firestore → login
+  if (!userData?.rol) return <Navigate to="/login" />;
+
+  // 5. Rol incorrecto para esta ruta → redirigir según su rol
+  if (allowedRole && userData.rol !== allowedRole) {
+    return <Navigate to={userData.rol === 'alumno' ? '/mis-cursos' : '/dashboard'} />;
   }
+
   return children;
 };
 
 const RootRedirect = () => {
   const { user, userData, loading } = useAuth();
-  if (loading) return null;
+  if (loading) return loadingScreen();
   if (!user) return <Navigate to="/login" />;
+  if (userData === null) return loadingScreen('Cargando perfil...');
   return <Navigate to={userData?.rol === 'alumno' ? '/mis-cursos' : '/dashboard'} />;
 };
 
