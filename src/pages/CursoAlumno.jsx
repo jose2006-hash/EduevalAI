@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   getCurso, getEntregasByAlumnoYCurso, crearEntrega, eliminarEntrega,
+  subirPdfEntrega, actualizarEntregaAlumno, eliminarArchivoEntrega,
   calcularNotaFinal, getRubricas, getActividadesByCurso,
   getMatriculasByAlumno, eliminarMatricula,
 } from '../firebase/services.js';
@@ -24,6 +25,7 @@ export default function CursoAlumno() {
   const [entregaSeleccionada, setEntregaSeleccionada] = useState(null);
   const [dragging, setDragging] = useState(false);
   const [confirm, setConfirm] = useState(null); // { tipo: 'entrega'|'desmatricular', id, nombre }
+  const [editEntrega, setEditEntrega] = useState(null); // entrega en edición
 
   const [form, setForm] = useState({
     tipoEvaluacion: '', actividadId: '', titulo: '', texto: '', rubricaId: '',
@@ -36,6 +38,7 @@ export default function CursoAlumno() {
   const [error, setError] = useState('');
   const [msg, setMsg] = useState('');
   const [tabActivo, setTabActivo] = useState('pdf');
+  const [pdfPreviewUrl, setPdfPreviewUrl] = useState('');
 
   useEffect(() => { cargar(); }, [cursoId, user]);
 
@@ -85,6 +88,10 @@ export default function CursoAlumno() {
     setLeyendo(true); setError('');
     const texto = await leerPDF(file);
     setArchivo(file); setArchivoTexto(texto); setTabActivo('pdf');
+    try {
+      if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl);
+      setPdfPreviewUrl(URL.createObjectURL(file));
+    } catch { /* ignore */ }
     setLeyendo(false);
   };
 
@@ -98,6 +105,12 @@ export default function CursoAlumno() {
     if (!textoFinal?.trim()) return setError('Sube un PDF o escribe el contenido de tu trabajo');
     if (!form.tipoEvaluacion) return setError('Selecciona el tipo de evaluación');
     if (!form.titulo.trim()) return setError('Ingresa un título para tu trabajo');
+    if (actividadSeleccionada?.fechaLimite) {
+      const limite = new Date(actividadSeleccionada.fechaLimite);
+      if (!Number.isNaN(limite.getTime()) && new Date() > limite) {
+        return setError('La fecha límite de esta actividad ya venció');
+      }
+    }
     setError(''); setEnviando(true); setMsg('');
     try {
       const rubrica = rubricas.find(r => r.id === form.rubricaId) || rubricas[0];
@@ -109,7 +122,41 @@ export default function CursoAlumno() {
           curso.silaboTexto || '', enunciadoTexto
         );
       }
-      await crearEntrega({
+      if (editEntrega) {
+        // Si existía PDF y se reemplaza o se cambia a texto, limpiar storage anterior
+        const cambiarATexto = tabActivo === 'texto';
+        const reemplazaPdf = tabActivo === 'pdf' && !!archivo;
+        if ((cambiarATexto || reemplazaPdf) && editEntrega.archivoPath) {
+          await eliminarArchivoEntrega(editEntrega.archivoPath);
+        }
+
+        const baseUpdate = {
+          tipoEvaluacion: form.tipoEvaluacion,
+          actividadId: form.actividadId || null,
+          actividadTitulo: actividadSeleccionada?.titulo || null,
+          titulo: form.titulo,
+          texto: textoFinal,
+          rubricaId: rubrica?.id || null,
+          rubricaNombre: rubrica?.nombre || null,
+          estado: resultado ? 'evaluado' : 'pendiente',
+          // reset campos de archivo (se vuelven a setear si subimos PDF)
+          ...(tabActivo === 'texto' ? { archivoNombre: null, archivoUrl: null, archivoPath: null, archivoMime: null, archivoSize: null } : {}),
+          ...(resultado || {}),
+        };
+
+        await actualizarEntregaAlumno(editEntrega.id, baseUpdate);
+        if (tabActivo === 'pdf' && archivo) {
+          const pdfData = await subirPdfEntrega({ file: archivo, entregaId: editEntrega.id, alumnoUid: user.uid, cursoId });
+          await actualizarEntregaAlumno(editEntrega.id, pdfData);
+        }
+
+        setMsg('✅ Entrega actualizada');
+        setEditEntrega(null);
+        setShowForm(false); resetForm(); await cargar();
+        return;
+      }
+
+      const nueva = await crearEntrega({
         alumnoUid: user.uid, alumnoNombre: userData.nombre,
         cursoId, cursoNombre: curso.nombre,
         tipoEvaluacion: form.tipoEvaluacion,
@@ -121,6 +168,11 @@ export default function CursoAlumno() {
         estado: resultado ? 'evaluado' : 'pendiente',
         ...(resultado || {}),
       });
+
+      if (tabActivo === 'pdf' && archivo) {
+        const pdfData = await subirPdfEntrega({ file: archivo, entregaId: nueva.id, alumnoUid: user.uid, cursoId });
+        await actualizarEntregaAlumno(nueva.id, pdfData);
+      }
       setMsg('✅ Trabajo enviado y evaluado correctamente');
       setShowForm(false); resetForm(); await cargar();
     } catch (err) {
@@ -132,12 +184,35 @@ export default function CursoAlumno() {
     setForm({ tipoEvaluacion: '', actividadId: '', titulo: '', texto: '', rubricaId: '' });
     setActividadSeleccionada(null);
     setArchivo(null); setArchivoTexto(''); setError(''); setTabActivo('pdf');
+    try { if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl); } catch { /* ignore */ }
+    setPdfPreviewUrl('');
   };
 
   // ── Eliminar entrega ───────────────────────────────────────────────────────
   const handleEliminarEntrega = (e) => {
     setEntregaSeleccionada(null);
     setConfirm({ tipo: 'entrega', id: e.id, nombre: e.titulo });
+  };
+
+  const handleEditarEntrega = (e) => {
+    setEntregaSeleccionada(null);
+    setEditEntrega(e);
+    setShowForm(true);
+    setMsg('');
+    setError('');
+    setForm({
+      tipoEvaluacion: e.tipoEvaluacion || '',
+      actividadId: e.actividadId || '',
+      titulo: e.titulo || '',
+      texto: e.texto || '',
+      rubricaId: e.rubricaId || '',
+    });
+    const act = e.actividadId ? actividades.find(a => a.id === e.actividadId) : null;
+    setActividadSeleccionada(act || null);
+    setArchivo(null);
+    setArchivoTexto(e.texto || '');
+    setTabActivo(e.archivoUrl ? 'pdf' : 'texto');
+    setPdfPreviewUrl(e.archivoUrl || '');
   };
 
   // ── Desmatricularse ────────────────────────────────────────────────────────
@@ -242,6 +317,11 @@ export default function CursoAlumno() {
                 </div>
                 {a.descripcion && <p style={s.actDesc}>{a.descripcion}</p>}
                 {a.enunciadoNombre && <p style={s.actArchivo}>📄 Enunciado: {a.enunciadoNombre}</p>}
+                {a.fechaLimite && (
+                  <p style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px', margin: '2px 0 0' }}>
+                    📅 Límite: {new Date(a.fechaLimite).toLocaleString('es-PE')}
+                  </p>
+                )}
                 <button style={s.responderBtn} onClick={() => {
                   setShowForm(true);
                   setForm(f => ({ ...f, tipoEvaluacion: a.tipoEvaluacion, actividadId: a.id, titulo: a.titulo, rubricaId: a.rubricaId || '' }));
@@ -332,8 +412,8 @@ export default function CursoAlumno() {
         <div style={s.overlay}>
           <div style={s.modal}>
             <div style={s.modalHeader}>
-              <h2 style={s.modalTitle}>📝 Subir Trabajo</h2>
-              <button style={s.closeBtn} onClick={() => { setShowForm(false); resetForm(); }}>✕</button>
+              <h2 style={s.modalTitle}>{editEntrega ? '✏️ Editar entrega' : '📝 Subir Trabajo'}</h2>
+              <button style={s.closeBtn} onClick={() => { setShowForm(false); setEditEntrega(null); resetForm(); }}>✕</button>
             </div>
             {actividadSeleccionada && (
               <div style={s.actividadInfoBox}>
@@ -343,6 +423,11 @@ export default function CursoAlumno() {
                 {actividadSeleccionada.enunciadoNombre && (
                   <p style={{ color: '#22c55e', fontSize: '12px', margin: '4px 0 0' }}>
                     📄 Enunciado cargado: {actividadSeleccionada.enunciadoNombre}
+                  </p>
+                )}
+                {actividadSeleccionada.fechaLimite && (
+                  <p style={{ color: '#f59e0b', fontSize: '12px', margin: '6px 0 0' }}>
+                    📅 Fecha límite: {new Date(actividadSeleccionada.fechaLimite).toLocaleString('es-PE')}
                   </p>
                 )}
               </div>
@@ -411,6 +496,18 @@ export default function CursoAlumno() {
                 )}
               </div>
             )}
+            {tabActivo === 'pdf' && (pdfPreviewUrl || archivo) && (
+              <div style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', overflow: 'hidden', marginBottom: '16px' }}>
+                <div style={{ padding: '10px 12px', background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.6)', fontSize: '12px' }}>
+                  Vista previa del PDF
+                </div>
+                <iframe
+                  title="Vista previa PDF"
+                  src={pdfPreviewUrl}
+                  style={{ width: '100%', height: '360px', border: 'none', background: '#0f0c29' }}
+                />
+              </div>
+            )}
             {tabActivo === 'texto' && (
               <textarea style={s.textarea}
                 placeholder="Escribe o pega el contenido de tu trabajo aquí..."
@@ -424,9 +521,9 @@ export default function CursoAlumno() {
               </div>
             )}
             <div style={{ display: 'flex', gap: '12px', marginTop: '20px' }}>
-              <button style={s.secondaryBtn} onClick={() => { setShowForm(false); resetForm(); }}>Cancelar</button>
+              <button style={s.secondaryBtn} onClick={() => { setShowForm(false); setEditEntrega(null); resetForm(); }}>Cancelar</button>
               <button style={s.primaryBtn} onClick={handleEnviar} disabled={enviando}>
-                {enviando ? 'Evaluando...' : '🚀 Enviar y evaluar con IA'}
+                {enviando ? 'Evaluando...' : (editEntrega ? '💾 Guardar cambios' : '🚀 Enviar y evaluar con IA')}
               </button>
             </div>
           </div>
@@ -446,11 +543,32 @@ export default function CursoAlumno() {
                 </p>
               </div>
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <button style={{ ...s.secondaryBtn, padding: '6px 10px', fontSize: '13px' }}
+                  onClick={() => handleEditarEntrega(entregaSeleccionada)}>✏️ Editar</button>
                 <button style={s.deleteEntregaBtn} title="Eliminar esta entrega"
                   onClick={() => handleEliminarEntrega(entregaSeleccionada)}>🗑</button>
                 <button style={s.closeBtn} onClick={() => setEntregaSeleccionada(null)}>✕</button>
               </div>
             </div>
+
+            {entregaSeleccionada.archivoUrl && (
+              <div style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', overflow: 'hidden', marginBottom: '18px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', background: 'rgba(255,255,255,0.04)' }}>
+                  <span style={{ color: 'rgba(255,255,255,0.65)', fontSize: '12px' }}>
+                    📄 {entregaSeleccionada.archivoNombre || 'PDF'}
+                  </span>
+                  <a href={entregaSeleccionada.archivoUrl} target="_blank" rel="noreferrer"
+                    style={{ color: '#a78bfa', fontSize: '12px', fontWeight: '600', textDecoration: 'none' }}>
+                    Abrir en nueva pestaña →
+                  </a>
+                </div>
+                <iframe
+                  title="PDF entrega"
+                  src={entregaSeleccionada.archivoUrl}
+                  style={{ width: '100%', height: '420px', border: 'none', background: '#0f0c29' }}
+                />
+              </div>
+            )}
 
             <div style={{ textAlign: 'center', padding: '20px 0', borderBottom: '1px solid rgba(255,255,255,0.06)', marginBottom: '20px' }}>
               <div style={{ fontSize: '56px', fontWeight: '800', color: nivelColor(entregaSeleccionada.notaFinal) }}>

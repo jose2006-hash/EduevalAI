@@ -1,7 +1,7 @@
 // src/firebase/services.js
 import {
   collection, doc, addDoc, getDoc, getDocs,
-  updateDoc, deleteDoc, query, where, orderBy, serverTimestamp
+  setDoc, updateDoc, deleteDoc, query, where, orderBy, serverTimestamp
 } from 'firebase/firestore';
 import {
   createUserWithEmailAndPassword,
@@ -9,15 +9,29 @@ import {
   signOut,
   updateProfile
 } from 'firebase/auth';
-import { db, auth } from './config.js';
+import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
+import { db, auth, storage } from './config.js';
+
+const safeDeleteStorageObject = async (path) => {
+  if (!path) return;
+  try {
+    await deleteObject(storageRef(storage, path));
+  } catch {
+    // ignore (file may not exist / permissions)
+  }
+};
 
 // ─── AUTH ────────────────────────────────────────────────────────────────────
 
 export const registerUser = async (email, password, displayName, role = 'alumno') => {
   const cred = await createUserWithEmailAndPassword(auth, email, password);
   await updateProfile(cred.user, { displayName });
-  await addDoc(collection(db, 'usuarios'), {
-    uid: cred.user.uid, email, nombre: displayName, rol: role, creadoEn: serverTimestamp(),
+  await setDoc(doc(db, 'usuarios', cred.user.uid), {
+    uid: cred.user.uid,
+    email,
+    nombre: displayName,
+    rol: role,
+    creadoEn: serverTimestamp(),
   });
   return cred.user;
 };
@@ -28,9 +42,8 @@ export const loginUser = (email, password) =>
 export const logoutUser = () => signOut(auth);
 
 export const getUserData = async (uid) => {
-  const q = query(collection(db, 'usuarios'), where('uid', '==', uid));
-  const snap = await getDocs(q);
-  return snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
+  const snap = await getDoc(doc(db, 'usuarios', uid));
+  return snap.exists() ? { id: snap.id, ...snap.data() } : null;
 };
 
 export const getAllAlumnos = async () => {
@@ -41,6 +54,21 @@ export const getAllAlumnos = async () => {
 
 export const eliminarAlumno = (documentId) =>
   deleteDoc(doc(db, 'usuarios', documentId));
+
+export const crearUsuarioSiNoExiste = async (firebaseUser, rol = 'docente') => {
+  if (!firebaseUser?.uid) throw new Error('Usuario inválido');
+  const existing = await getUserData(firebaseUser.uid);
+  if (existing) return existing;
+  const nombre = firebaseUser.displayName || firebaseUser.email || 'Usuario';
+  await setDoc(doc(db, 'usuarios', firebaseUser.uid), {
+    uid: firebaseUser.uid,
+    email: firebaseUser.email || null,
+    nombre,
+    rol,
+    creadoEn: serverTimestamp(),
+  });
+  return await getUserData(firebaseUser.uid);
+};
 
 // ─── CURSOS ──────────────────────────────────────────────────────────────────
 
@@ -181,8 +209,30 @@ export const eliminarRubrica = (id) => deleteDoc(doc(db, 'rubricas', id));
 
 // ─── ENTREGAS ────────────────────────────────────────────────────────────────
 
-export const crearEntrega = (entrega) =>
-  addDoc(collection(db, 'entregas'), { ...entrega, creadoEn: serverTimestamp() });
+export const crearEntrega = async (entrega) => {
+  const ref = await addDoc(collection(db, 'entregas'), { ...entrega, creadoEn: serverTimestamp() });
+  return { id: ref.id };
+};
+
+export const subirPdfEntrega = async ({ file, entregaId, alumnoUid, cursoId }) => {
+  if (!file || !entregaId || !alumnoUid || !cursoId) throw new Error('Faltan datos para subir el PDF');
+  const path = `entregas/${cursoId}/${alumnoUid}/${entregaId}/${Date.now()}_${file.name}`;
+  const objRef = storageRef(storage, path);
+  await uploadBytes(objRef, file, { contentType: file.type || 'application/pdf' });
+  const url = await getDownloadURL(objRef);
+  return {
+    archivoUrl: url,
+    archivoPath: path,
+    archivoNombre: file.name,
+    archivoMime: file.type || 'application/pdf',
+    archivoSize: file.size || null,
+  };
+};
+
+export const eliminarArchivoEntrega = (archivoPath) => safeDeleteStorageObject(archivoPath);
+
+export const actualizarEntregaAlumno = (id, datos) =>
+  updateDoc(doc(db, 'entregas', id), { ...datos, actualizadoEn: serverTimestamp() });
 
 export const getEntregasByAlumnoYCurso = async (alumnoUid, cursoId) => {
   const q = query(collection(db, 'entregas'),
@@ -209,7 +259,12 @@ export const getTodasEntregas = async () => {
 export const actualizarEntrega = (id, datos) =>
   updateDoc(doc(db, 'entregas', id), { ...datos, evaluadoEn: serverTimestamp() });
 
-export const eliminarEntrega = (id) => deleteDoc(doc(db, 'entregas', id));
+export const eliminarEntrega = async (id) => {
+  const snap = await getDoc(doc(db, 'entregas', id));
+  const data = snap.exists() ? snap.data() : null;
+  await deleteDoc(doc(db, 'entregas', id));
+  if (data?.archivoPath) await safeDeleteStorageObject(data.archivoPath);
+};
 
 // ─── EVALUACIONES (legado) ───────────────────────────────────────────────────
 

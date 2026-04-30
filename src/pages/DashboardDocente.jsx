@@ -9,7 +9,7 @@ import {
 import {
   getTodasEntregas, getTodasEvaluaciones,
   getCursos, getAllAlumnos, logoutUser,
-  eliminarEntrega, eliminarEvaluacion,
+  eliminarEntrega, eliminarEvaluacion, actualizarEntrega,
 } from '../firebase/services.js';
 import { useAuth } from '../components/AuthContext.jsx';
 
@@ -24,6 +24,9 @@ export default function DashboardDocente() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [confirm, setConfirm] = useState(null); // { id, nombre }
+  const [detalle, setDetalle] = useState(null);
+  const [notaManual, setNotaManual] = useState('');
+  const [guardandoManual, setGuardandoManual] = useState(false);
 
   useEffect(() => { cargar(); }, []);
 
@@ -91,6 +94,34 @@ export default function DashboardDocente() {
     await eliminarEntrega(confirm.id);
     setEntregas(prev => prev.filter(e => e.id !== confirm.id));
     setConfirm(null);
+  };
+
+  const nivelPorNota = (nota) => {
+    if (nota === null || nota === undefined) return '—';
+    if (nota >= 18) return 'Excelente';
+    if (nota >= 14) return 'Bueno';
+    if (nota >= 11) return 'Regular';
+    return 'Insuficiente';
+  };
+
+  const guardarNotaManual = async () => {
+    if (!detalle) return;
+    const n = Number(String(notaManual).replace(',', '.'));
+    if (Number.isNaN(n) || n < 0 || n > 20) return;
+    setGuardandoManual(true);
+    try {
+      const nivel = nivelPorNota(n);
+      await actualizarEntrega(detalle.id, {
+        estado: 'evaluado',
+        notaFinal: Math.round(n * 10) / 10,
+        notaManual: Math.round(n * 10) / 10,
+        nivelGlobal: nivel,
+      });
+      setEntregas(prev => prev.map(e => e.id === detalle.id ? { ...e, estado: 'evaluado', notaFinal: Math.round(n * 10) / 10, notaManual: Math.round(n * 10) / 10, nivelGlobal: nivel } : e));
+      setDetalle(d => d ? ({ ...d, estado: 'evaluado', notaFinal: Math.round(n * 10) / 10, notaManual: Math.round(n * 10) / 10, nivelGlobal: nivel }) : d);
+    } finally {
+      setGuardandoManual(false);
+    }
   };
 
   const handleLogout = async () => { await logoutUser(); navigate('/login'); };
@@ -177,7 +208,7 @@ export default function DashboardDocente() {
               </thead>
               <tbody>
                 {entregas.slice(0, 12).map((ev, i) => (
-                  <tr key={i} style={styles.tr}>
+                  <tr key={i} style={{ ...styles.tr, cursor: 'pointer' }} onClick={() => { setDetalle(ev); setNotaManual(ev?.notaManual ?? ''); }}>
                     <td style={styles.td}>{ev.alumnoNombre || '—'}</td>
                     <td style={styles.td}>
                       <span style={{ maxWidth: '140px', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -207,7 +238,7 @@ export default function DashboardDocente() {
                     </td>
                     <td style={styles.td}>
                       <button style={styles.deleteBtn} title="Eliminar entrega"
-                        onClick={() => setConfirm({ id: ev.id, nombre: ev.titulo || ev.alumnoNombre })}>
+                        onClick={(e) => { e.stopPropagation(); setConfirm({ id: ev.id, nombre: ev.titulo || ev.alumnoNombre }); }}>
                         🗑
                       </button>
                     </td>
@@ -236,6 +267,88 @@ export default function DashboardDocente() {
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
               <button style={styles.cancelBtn} onClick={() => setConfirm(null)}>Cancelar</button>
               <button style={styles.dangerBtn} onClick={handleEliminar}>Sí, eliminar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal detalle entrega + nota manual */}
+      {detalle && (
+        <div style={styles.overlay}>
+          <div style={{ ...styles.confirmModal, maxWidth: '760px', textAlign: 'left', padding: '28px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', marginBottom: '14px' }}>
+              <div>
+                <h3 style={{ color: '#fff', fontSize: '18px', margin: 0 }}>{detalle.titulo || 'Entrega'}</h3>
+                <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '13px', margin: '6px 0 0' }}>
+                  {detalle.alumnoNombre || '—'} · {detalle.cursoNombre || '—'} · {detalle.tipoEvaluacion || '—'}
+                </p>
+              </div>
+              <button onClick={() => setDetalle(null)} style={{ ...styles.cancelBtn, padding: '8px 12px' }}>✕</button>
+            </div>
+
+            {detalle.archivoUrl && (
+              <div style={{ border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', overflow: 'hidden', marginBottom: '16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', background: 'rgba(255,255,255,0.04)' }}>
+                  <span style={{ color: 'rgba(255,255,255,0.65)', fontSize: '12px' }}>📄 {detalle.archivoNombre || 'PDF'}</span>
+                  <a href={detalle.archivoUrl} target="_blank" rel="noreferrer" style={{ color: '#a78bfa', fontSize: '12px', fontWeight: '600', textDecoration: 'none' }}>
+                    Abrir →
+                  </a>
+                </div>
+                <iframe title="PDF entrega" src={detalle.archivoUrl} style={{ width: '100%', height: '420px', border: 'none', background: '#0f0c29' }} />
+              </div>
+            )}
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+              <div style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', padding: '14px' }}>
+                <p style={{ color: 'rgba(255,255,255,0.45)', fontSize: '11px', margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Nota actual</p>
+                <div style={{ color: '#fff', fontSize: '34px', fontWeight: '800' }}>
+                  {detalle.estado === 'evaluado' ? `${detalle.notaFinal ?? '—'}/20` : '⏳ Pendiente'}
+                </div>
+                <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '13px', margin: '6px 0 0' }}>
+                  Nivel: {detalle.nivelGlobal || '—'}
+                </p>
+              </div>
+
+              <div style={{ background: 'rgba(102,126,234,0.08)', border: '1px solid rgba(102,126,234,0.2)', borderRadius: '12px', padding: '14px' }}>
+                <p style={{ color: '#a78bfa', fontSize: '11px', margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Nota manual</p>
+                <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                  <input
+                    value={notaManual}
+                    onChange={(e) => setNotaManual(e.target.value)}
+                    placeholder="0 - 20"
+                    style={{
+                      flex: 1,
+                      padding: '10px 12px',
+                      borderRadius: '10px',
+                      border: '1px solid rgba(255,255,255,0.12)',
+                      background: 'rgba(20,16,50,0.9)',
+                      color: '#fff',
+                      outline: 'none',
+                      fontSize: '14px',
+                    }}
+                  />
+                  <button
+                    onClick={guardarNotaManual}
+                    disabled={guardandoManual}
+                    style={{ ...styles.ctaBtn, padding: '10px 14px', fontSize: '13px' }}
+                  >
+                    {guardandoManual ? 'Guardando...' : 'Guardar'}
+                  </button>
+                </div>
+                <p style={{ color: 'rgba(255,255,255,0.35)', fontSize: '12px', margin: '10px 0 0' }}>
+                  Al guardar, se reemplaza la nota final y el nivel global.
+                </p>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '16px' }}>
+              <button style={styles.cancelBtn} onClick={() => setDetalle(null)}>Cerrar</button>
+              <button
+                style={styles.dangerBtn}
+                onClick={() => { setDetalle(null); setConfirm({ id: detalle.id, nombre: detalle.titulo || detalle.alumnoNombre }); }}
+              >
+                Eliminar entrega
+              </button>
             </div>
           </div>
         </div>
