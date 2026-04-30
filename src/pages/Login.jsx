@@ -17,16 +17,13 @@ export default function Login() {
 
   const handleLogin = async (e) => {
     e.preventDefault();
-    setError('');
-    setLoading(true);
+    setError(''); setLoading(true);
     try {
       await loginUser(email, password);
       navigate('/');
     } catch {
       setError('Correo o contraseña incorrectos');
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   };
 
   const handleRegister = async (e) => {
@@ -40,144 +37,236 @@ export default function Login() {
     } catch (err) {
       if (err.code === 'auth/email-already-in-use') setError('Este correo ya está registrado');
       else setError('Error al registrar: ' + err.message);
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   };
 
   return (
-    <div style={styles.container}>
-      <div style={styles.card}>
-        <div style={styles.logo}>🎓</div>
-        <h1 style={styles.title}>AcademIA</h1>
-        <p style={styles.subtitle}>Sistema Inteligente de Evaluación y Retroalimentación Académica</p>
-        <p style={styles.docente}>Mg. Gilder Cieza Altamirano · Docente Universitario</p>
+    <div style={s.container}>
+      {/* Animated background blobs */}
+      <div style={s.blob1} />
+      <div style={s.blob2} />
+      <div style={s.blob3} />
 
-        <div style={styles.toggle}>
-          <button style={{ ...styles.toggleBtn, ...(mode === 'login' ? styles.toggleActive : {}) }}
+      <div style={s.card}>
+        {/* Logo */}
+        <div style={s.logoWrap}>
+          <span style={s.logoEmoji}>🎓</span>
+        </div>
+        <h1 style={s.title}>AcademIA</h1>
+        <p style={s.subtitle}>Sistema Inteligente de Evaluación y Retroalimentación Académica</p>
+        <p style={s.docente}>Mg. Gilder Cieza Altamirano · Docente Universitario</p>
+
+        {/* Toggle */}
+        <div style={s.toggle}>
+          <button
+            style={{ ...s.toggleBtn, ...(mode === 'login' ? s.toggleActive : {}) }}
             onClick={() => { setMode('login'); reset(); }}>
             Iniciar sesión
           </button>
-          <button style={{ ...styles.toggleBtn, ...(mode === 'register' ? styles.toggleActive : {}) }}
+          <button
+            style={{ ...s.toggleBtn, ...(mode === 'register' ? s.toggleActive : {}) }}
             onClick={() => { setMode('register'); reset(); }}>
             Registrarse
           </button>
         </div>
 
         {mode === 'login' && (
-          <form onSubmit={handleLogin} style={styles.form}>
-            <div style={styles.field}>
-              <label style={styles.label}>Correo electrónico</label>
+          <form onSubmit={handleLogin} style={s.form}>
+            <div style={s.field}>
+              <label style={s.label}>Correo electrónico</label>
               <input type="email" value={email} onChange={e => setEmail(e.target.value)}
-                style={styles.input} placeholder="correo@universidad.edu" required />
+                style={s.input} placeholder="correo@universidad.edu" required />
             </div>
-            <div style={styles.field}>
-              <label style={styles.label}>Contraseña</label>
+            <div style={s.field}>
+              <label style={s.label}>Contraseña</label>
               <input type="password" value={password} onChange={e => setPassword(e.target.value)}
-                style={styles.input} placeholder="••••••••" required />
+                style={s.input} placeholder="••••••••" required />
             </div>
-            {error && <p style={styles.error}>{error}</p>}
-            <button type="submit" style={styles.btn} disabled={loading}>
-              {loading ? 'Ingresando...' : 'Ingresar'}
+            {error && <div style={s.errorBox}>{error}</div>}
+            <button type="submit" style={s.btn} disabled={loading}>
+              {loading
+                ? <span style={s.loadingInner}><span style={s.spinner} /> Ingresando...</span>
+                : '→ Ingresar'}
             </button>
           </form>
         )}
 
         {mode === 'register' && (
-          <form onSubmit={handleRegister} style={styles.form}>
-            <div style={styles.field}>
-              <label style={styles.label}>Nombre completo</label>
+          <form onSubmit={handleRegister} style={s.form}>
+            <div style={s.field}>
+              <label style={s.label}>Nombre completo</label>
               <input type="text" value={nombre} onChange={e => setNombre(e.target.value)}
-                style={styles.input} placeholder="Juan Pérez García" required />
+                style={s.input} placeholder="Juan Pérez García" required />
             </div>
-            <div style={styles.field}>
-              <label style={styles.label}>Correo electrónico</label>
+            <div style={s.field}>
+              <label style={s.label}>Correo electrónico</label>
               <input type="email" value={email} onChange={e => setEmail(e.target.value)}
-                style={styles.input} placeholder="correo@universidad.edu" required />
+                style={s.input} placeholder="correo@universidad.edu" required />
             </div>
-            <div style={styles.field}>
-              <label style={styles.label}>Contraseña</label>
+            <div style={s.field}>
+              <label style={s.label}>Contraseña</label>
               <input type="password" value={password} onChange={e => setPassword(e.target.value)}
-                style={styles.input} placeholder="Mínimo 6 caracteres" required />
+                style={s.input} placeholder="Mínimo 6 caracteres" required />
             </div>
-            <div style={styles.field}>
-              <label style={styles.label}>Soy...</label>
-              <div style={styles.rolSelector}>
+            <div style={s.field}>
+              <label style={s.label}>Soy...</label>
+              <div style={s.rolSelector}>
                 {[
                   { value: 'alumno', icon: '👨‍🎓', label: 'Alumno' },
                   { value: 'docente', icon: '👨‍🏫', label: 'Docente' },
                 ].map(r => (
                   <button key={r.value} type="button" onClick={() => setRol(r.value)}
-                    style={{ ...styles.rolBtn, ...(rol === r.value ? styles.rolBtnActive : {}) }}>
-                    <span style={{ fontSize: '22px' }}>{r.icon}</span>
-                    <span>{r.label}</span>
+                    style={{ ...s.rolBtn, ...(rol === r.value ? s.rolBtnActive : {}) }}>
+                    <span style={{ fontSize: '28px' }}>{r.icon}</span>
+                    <span style={{ fontWeight: '600' }}>{r.label}</span>
+                    {rol === r.value && <span style={s.checkMark}>✓</span>}
                   </button>
                 ))}
               </div>
             </div>
-            {error && <p style={styles.error}>{error}</p>}
-            <button type="submit" style={styles.btn} disabled={loading}>
-              {loading ? 'Creando cuenta...' : 'Crear cuenta'}
+            {error && <div style={s.errorBox}>{error}</div>}
+            <button type="submit" style={s.btn} disabled={loading}>
+              {loading
+                ? <span style={s.loadingInner}><span style={s.spinner} /> Creando cuenta...</span>
+                : '→ Crear cuenta'}
             </button>
-            <p style={styles.hint}>
-              Acceso como <strong>{rol}</strong>:{' '}
-              {rol === 'docente' ? 'dashboard, rúbricas y evaluaciones.' : 'portal de notas y retroalimentación.'}
+            <p style={s.hint}>
+              Acceso como <strong style={{ color: '#a78bfa' }}>{rol}</strong>:{' '}
+              {rol === 'docente'
+                ? 'gestión de cursos, rúbricas y evaluaciones.'
+                : 'portal de notas y retroalimentación.'}
             </p>
           </form>
         )}
       </div>
+
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes blob { 0%,100%{transform:translate(0,0) scale(1)} 33%{transform:translate(30px,-50px) scale(1.1)} 66%{transform:translate(-20px,20px) scale(0.9)} }
+      `}</style>
     </div>
   );
 }
 
-const styles = {
+const s = {
   container: {
     minHeight: '100vh',
-    background: 'linear-gradient(135deg, #0f0c29, #302b63, #24243e)',
+    background: 'linear-gradient(135deg, #0a0515 0%, #1a0533 40%, #0d1f4a 100%)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     fontFamily: "'Segoe UI', sans-serif",
+    position: 'relative', overflow: 'hidden',
+  },
+  blob1: {
+    position: 'absolute', width: '500px', height: '500px', borderRadius: '50%',
+    background: 'radial-gradient(circle, rgba(139,92,246,0.35) 0%, transparent 70%)',
+    top: '-100px', left: '-100px',
+    animation: 'blob 8s ease-in-out infinite',
+  },
+  blob2: {
+    position: 'absolute', width: '400px', height: '400px', borderRadius: '50%',
+    background: 'radial-gradient(circle, rgba(59,130,246,0.3) 0%, transparent 70%)',
+    bottom: '-80px', right: '-80px',
+    animation: 'blob 10s ease-in-out infinite reverse',
+  },
+  blob3: {
+    position: 'absolute', width: '300px', height: '300px', borderRadius: '50%',
+    background: 'radial-gradient(circle, rgba(236,72,153,0.2) 0%, transparent 70%)',
+    top: '50%', left: '60%',
+    animation: 'blob 12s ease-in-out infinite',
   },
   card: {
-    background: 'rgba(255,255,255,0.05)', backdropFilter: 'blur(20px)',
-    border: '1px solid rgba(255,255,255,0.1)', borderRadius: '24px',
-    padding: '48px', width: '100%', maxWidth: '440px', textAlign: 'center',
+    position: 'relative', zIndex: 1,
+    background: 'rgba(255,255,255,0.06)',
+    backdropFilter: 'blur(24px)',
+    border: '1px solid rgba(255,255,255,0.12)',
+    borderRadius: '28px',
+    padding: '48px 44px',
+    width: '100%', maxWidth: '460px',
+    textAlign: 'center',
+    boxShadow: '0 32px 80px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.1)',
   },
-  logo: { fontSize: '48px', marginBottom: '12px' },
-  title: { color: '#fff', fontSize: '32px', fontWeight: '700', margin: '0 0 8px' },
-  subtitle: { color: 'rgba(255,255,255,0.5)', fontSize: '13px', marginBottom: '6px' },
-  docente: { color: 'rgba(255,255,255,0.3)', fontSize: '12px', marginBottom: '24px', fontStyle: 'italic' },
+  logoWrap: {
+    width: '72px', height: '72px', borderRadius: '20px', margin: '0 auto 16px',
+    background: 'linear-gradient(135deg, #7c3aed, #2563eb)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    boxShadow: '0 8px 32px rgba(124,58,237,0.5)',
+  },
+  logoEmoji: { fontSize: '36px' },
+  title: {
+    color: '#fff', fontSize: '34px', fontWeight: '800', margin: '0 0 8px',
+    background: 'linear-gradient(135deg, #fff 40%, #a78bfa)',
+    WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
+    letterSpacing: '-0.5px',
+  },
+  subtitle: { color: 'rgba(255,255,255,0.55)', fontSize: '13px', marginBottom: '4px', lineHeight: '1.5' },
+  docente: { color: 'rgba(167,139,250,0.6)', fontSize: '12px', marginBottom: '28px', fontStyle: 'italic' },
   toggle: {
-    display: 'flex', background: 'rgba(255,255,255,0.07)', borderRadius: '12px',
-    padding: '4px', marginBottom: '28px',
+    display: 'flex', background: 'rgba(0,0,0,0.3)', borderRadius: '14px',
+    padding: '4px', marginBottom: '28px', gap: '4px',
+    border: '1px solid rgba(255,255,255,0.08)',
   },
   toggleBtn: {
-    flex: 1, padding: '10px', borderRadius: '9px', border: 'none',
-    background: 'transparent', color: 'rgba(255,255,255,0.5)',
-    fontSize: '14px', fontWeight: '500', cursor: 'pointer',
+    flex: 1, padding: '11px', borderRadius: '11px', border: 'none',
+    background: 'transparent', color: 'rgba(255,255,255,0.45)',
+    fontSize: '14px', fontWeight: '500', cursor: 'pointer', transition: 'all 0.2s',
   },
-  toggleActive: { background: 'rgba(255,255,255,0.12)', color: '#fff', fontWeight: '600' },
+  toggleActive: {
+    background: 'linear-gradient(135deg, rgba(124,58,237,0.6), rgba(37,99,235,0.6))',
+    color: '#fff', fontWeight: '700',
+    boxShadow: '0 4px 16px rgba(124,58,237,0.3)',
+  },
   form: { textAlign: 'left' },
   field: { marginBottom: '18px' },
-  label: { display: 'block', color: 'rgba(255,255,255,0.7)', fontSize: '13px', marginBottom: '8px', fontWeight: '500' },
-  input: {
-    width: '100%', padding: '14px 16px', borderRadius: '12px',
-    border: '1px solid rgba(255,255,255,0.15)', background: 'rgba(255,255,255,0.08)',
-    color: '#fff', fontSize: '15px', outline: 'none', boxSizing: 'border-box',
+  label: {
+    display: 'block', color: 'rgba(255,255,255,0.75)', fontSize: '13px',
+    marginBottom: '8px', fontWeight: '600', letterSpacing: '0.02em',
   },
-  rolSelector: { display: 'flex', gap: '10px' },
+  input: {
+    width: '100%', padding: '14px 16px', borderRadius: '13px',
+    border: '1px solid rgba(255,255,255,0.12)',
+    background: 'rgba(255,255,255,0.07)',
+    color: '#fff', fontSize: '15px', outline: 'none', boxSizing: 'border-box',
+    transition: 'border-color 0.2s, box-shadow 0.2s',
+  },
+  rolSelector: { display: 'flex', gap: '12px' },
   rolBtn: {
     flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px',
-    padding: '14px', borderRadius: '12px', border: '2px solid rgba(255,255,255,0.1)',
-    background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.5)',
-    fontSize: '14px', fontWeight: '500', cursor: 'pointer',
+    padding: '18px 12px', borderRadius: '14px',
+    border: '2px solid rgba(255,255,255,0.1)',
+    background: 'rgba(255,255,255,0.04)',
+    color: 'rgba(255,255,255,0.5)',
+    fontSize: '14px', cursor: 'pointer', position: 'relative',
+    transition: 'all 0.2s',
   },
-  rolBtnActive: { border: '2px solid #667eea', background: 'rgba(102,126,234,0.15)', color: '#fff' },
-  error: { color: '#ff6b6b', fontSize: '13px', marginBottom: '12px', textAlign: 'center' },
+  rolBtnActive: {
+    border: '2px solid #7c3aed',
+    background: 'linear-gradient(135deg, rgba(124,58,237,0.2), rgba(37,99,235,0.15))',
+    color: '#fff',
+    boxShadow: '0 0 20px rgba(124,58,237,0.3)',
+  },
+  checkMark: {
+    position: 'absolute', top: '8px', right: '10px',
+    color: '#a78bfa', fontSize: '13px', fontWeight: '700',
+  },
+  errorBox: {
+    background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.3)',
+    color: '#fca5a5', fontSize: '13px', padding: '12px 16px',
+    borderRadius: '10px', marginBottom: '14px', textAlign: 'center',
+  },
   btn: {
-    width: '100%', padding: '16px', borderRadius: '12px',
-    background: 'linear-gradient(135deg, #667eea, #764ba2)',
-    color: '#fff', fontSize: '16px', fontWeight: '600',
+    width: '100%', padding: '16px', borderRadius: '14px',
+    background: 'linear-gradient(135deg, #7c3aed, #2563eb)',
+    color: '#fff', fontSize: '16px', fontWeight: '700',
     border: 'none', cursor: 'pointer', marginTop: '4px', marginBottom: '16px',
+    boxShadow: '0 8px 24px rgba(124,58,237,0.4)',
+    transition: 'opacity 0.2s, transform 0.1s',
+    letterSpacing: '0.03em',
   },
-  hint: { color: 'rgba(255,255,255,0.3)', fontSize: '12px', textAlign: 'center', lineHeight: '1.5' },
+  loadingInner: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px' },
+  spinner: {
+    display: 'inline-block', width: '16px', height: '16px',
+    border: '2px solid rgba(255,255,255,0.3)', borderTop: '2px solid #fff',
+    borderRadius: '50%', animation: 'spin 0.8s linear infinite',
+  },
+  hint: { color: 'rgba(255,255,255,0.3)', fontSize: '12px', textAlign: 'center', lineHeight: '1.6' },
 };

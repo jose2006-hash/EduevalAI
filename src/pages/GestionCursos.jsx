@@ -27,7 +27,7 @@ export default function GestionCursos() {
   const [cursoPendientes, setCursoPendientes] = useState(null);
   const [pendientes, setPendientes] = useState([]);
   const [aprobados, setAprobados] = useState([]);
-  const [confirm, setConfirm] = useState(null); // { tipo, id, nombre }
+  const [confirm, setConfirm] = useState(null);
 
   const [cursoActividades, setCursoActividades] = useState(null);
   const [actividades, setActividades] = useState([]);
@@ -38,6 +38,7 @@ export default function GestionCursos() {
   const [formAct, setFormAct] = useState({
     titulo: '', tipoEvaluacion: '', descripcion: '',
     enunciadoTexto: '', enunciadoNombre: '', rubricaId: '',
+    fechaLimite: '',
   });
   const [leyendoAct, setLeyendoAct] = useState(false);
 
@@ -67,20 +68,9 @@ export default function GestionCursos() {
   const handleAprobar = async (id) => { await aprobarMatricula(id); await abrirSolicitudes(cursoPendientes); };
   const handleRechazar = async (id) => { await rechazarMatricula(id); await abrirSolicitudes(cursoPendientes); };
 
-  // ── Expulsar alumno ────────────────────────────────────────────────────────
-  const handleExpulsarAlumno = (matricula) => {
-    setConfirm({ tipo: 'alumno', id: matricula.id, nombre: matricula.alumnoNombre });
-  };
-
-  // ── Eliminar actividad ─────────────────────────────────────────────────────
-  const handleEliminarActividad = (act) => {
-    setConfirm({ tipo: 'actividad', id: act.id, nombre: act.titulo });
-  };
-
-  // ── Eliminar curso ─────────────────────────────────────────────────────────
-  const handleEliminarCurso = (curso) => {
-    setConfirm({ tipo: 'curso', id: curso.id, nombre: curso.nombre });
-  };
+  const handleExpulsarAlumno = (m) => setConfirm({ tipo: 'alumno', id: m.id, nombre: m.alumnoNombre });
+  const handleEliminarActividad = (a) => setConfirm({ tipo: 'actividad', id: a.id, nombre: a.titulo });
+  const handleEliminarCurso = (c) => setConfirm({ tipo: 'curso', id: c.id, nombre: c.nombre });
 
   const ejecutarConfirm = async () => {
     if (!confirm) return;
@@ -99,24 +89,18 @@ export default function GestionCursos() {
         await cargarCursos();
         setMsg('✅ Curso eliminado');
       }
-    } catch (err) {
-      setMsg('❌ Error: ' + err.message);
-    }
+    } catch (err) { setMsg('❌ Error: ' + err.message); }
     setConfirm(null);
   };
 
-  // ── Actividades ────────────────────────────────────────────────────────────
   const abrirActividades = async (curso) => {
     setCursoActividades(curso);
-    setShowActForm(false);
-    setMsgAct('');
+    setShowActForm(false); setMsgAct('');
     const [acts, rubs] = await Promise.all([
-      getActividadesByCurso(curso.id),
-      getRubricas(curso.id),
+      getActividadesByCurso(curso.id), getRubricas(curso.id),
     ]);
-    setActividades(acts);
-    setRubricas(rubs);
-    setFormAct(f => ({ ...f, tipoEvaluacion: curso.tiposEvaluacion?.[0]?.nombre || '' }));
+    setActividades(acts); setRubricas(rubs);
+    setFormAct(f => ({ ...f, tipoEvaluacion: curso.tiposEvaluacion?.[0]?.nombre || '', fechaLimite: '' }));
   };
 
   const leerPDFActividad = (file) => new Promise((resolve) => {
@@ -155,14 +139,11 @@ export default function GestionCursos() {
       });
       setMsgAct(`✅ Actividad "${formAct.titulo}" publicada`);
       setShowActForm(false);
-      setFormAct({ titulo: '', tipoEvaluacion: cursoActividades.tiposEvaluacion?.[0]?.nombre || '', descripcion: '', enunciadoTexto: '', enunciadoNombre: '', rubricaId: '' });
+      setFormAct({ titulo: '', tipoEvaluacion: cursoActividades.tiposEvaluacion?.[0]?.nombre || '', descripcion: '', enunciadoTexto: '', enunciadoNombre: '', rubricaId: '', fechaLimite: '' });
       const acts = await getActividadesByCurso(cursoActividades.id);
       setActividades(acts);
-    } catch (err) {
-      setMsgAct('❌ Error: ' + err.message);
-    } finally {
-      setGuardandoAct(false);
-    }
+    } catch (err) { setMsgAct('❌ Error: ' + err.message); }
+    finally { setGuardandoAct(false); }
   };
 
   const handleSilaboPDF = (e) => {
@@ -200,11 +181,18 @@ export default function GestionCursos() {
       await cargarCursos();
       setShowForm(false);
       setForm({ nombre: '', seccion: '', codigo: '', descripcion: '', ciclo: '', silaboTexto: '', silaboNombre: '', tiposEvaluacion: TIPOS_DEFAULT });
-    } catch (err) {
-      setMsg('❌ Error: ' + err.message);
-    } finally {
-      setGuardando(false);
-    }
+    } catch (err) { setMsg('❌ Error: ' + err.message); }
+    finally { setGuardando(false); }
+  };
+
+  // Helper para mostrar fecha límite con color si está vencida
+  const fechaLimiteDisplay = (fechaStr) => {
+    if (!fechaStr) return null;
+    const fecha = new Date(fechaStr);
+    const hoy = new Date();
+    const vencida = fecha < hoy;
+    const diff = Math.ceil((fecha - hoy) / (1000 * 60 * 60 * 24));
+    return { fecha, vencida, diff };
   };
 
   return (
@@ -228,8 +216,7 @@ export default function GestionCursos() {
               <span style={s.cursoIcon}>📚</span>
               <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                 {c.seccion && <span style={s.seccionBadge}>Sección {c.seccion}</span>}
-                <button style={s.deleteCursoBtn} title="Eliminar curso"
-                  onClick={() => handleEliminarCurso(c)}>🗑</button>
+                <button style={s.deleteCursoBtn} title="Eliminar curso" onClick={() => handleEliminarCurso(c)}>🗑</button>
               </div>
             </div>
             <h3 style={s.cursoNombre}>{c.nombre}</h3>
@@ -245,12 +232,8 @@ export default function GestionCursos() {
               <p style={s.infoValue}>Código: <strong style={{ color: '#a78bfa' }}>{c.codigo}</strong> + nombre del profesor</p>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px' }}>
-              <button style={s.actividadesBtn} onClick={() => abrirActividades(c)}>
-                📝 Actividades y enunciados
-              </button>
-              <button style={s.solicitudesBtn} onClick={() => abrirSolicitudes(c)}>
-                👥 Ver alumnos y solicitudes
-              </button>
+              <button style={s.actividadesBtn} onClick={() => abrirActividades(c)}>📝 Actividades y enunciados</button>
+              <button style={s.solicitudesBtn} onClick={() => abrirSolicitudes(c)}>👥 Ver alumnos y solicitudes</button>
             </div>
           </div>
         ))}
@@ -271,9 +254,7 @@ export default function GestionCursos() {
                confirm.tipo === 'actividad' ? 'Eliminar actividad' : 'Eliminar curso'}
             </h3>
             <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '14px', margin: '0 0 24px', lineHeight: '1.5' }}>
-              ¿Estás seguro de que deseas eliminar <strong style={{ color: '#fff' }}>"{confirm.nombre}"</strong>?
-              {confirm.tipo === 'curso' && ' Esto no eliminará las entregas de los alumnos.'}
-              Esta acción no se puede deshacer.
+              ¿Eliminar <strong style={{ color: '#fff' }}>"{confirm.nombre}"</strong>? Esta acción no se puede deshacer.
             </p>
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
               <button style={s.secondaryBtn} onClick={() => setConfirm(null)}>Cancelar</button>
@@ -296,54 +277,48 @@ export default function GestionCursos() {
               </div>
               <button style={s.closeBtn} onClick={() => setCursoPendientes(null)}>✕</button>
             </div>
-
             <div style={s.seccion}>
               <h3 style={s.seccionTitle}>
                 ⏳ Solicitudes pendientes
                 {pendientes.length > 0 && <span style={s.badgeRed}>{pendientes.length}</span>}
               </h3>
-              {pendientes.length === 0 ? (
-                <p style={s.emptyText}>Sin solicitudes pendientes</p>
-              ) : pendientes.map((m, i) => (
-                <div key={i} style={s.alumnoRow}>
-                  <div style={s.alumnoInfo}>
-                    <span style={s.alumnoAvatar}>👤</span>
-                    <div>
-                      <p style={s.alumnoNombre}>{m.alumnoNombre}</p>
-                      <p style={s.alumnoEmail}>{m.alumnoEmail}</p>
+              {pendientes.length === 0 ? <p style={s.emptyText}>Sin solicitudes pendientes</p>
+                : pendientes.map((m, i) => (
+                  <div key={i} style={s.alumnoRow}>
+                    <div style={s.alumnoInfo}>
+                      <span style={s.alumnoAvatar}>👤</span>
+                      <div>
+                        <p style={s.alumnoNombre}>{m.alumnoNombre}</p>
+                        <p style={s.alumnoEmail}>{m.alumnoEmail}</p>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button style={s.aprobarBtn} onClick={() => handleAprobar(m.id)}>✓ Aprobar</button>
+                      <button style={s.rechazarBtn} onClick={() => handleRechazar(m.id)}>✕ Rechazar</button>
                     </div>
                   </div>
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <button style={s.aprobarBtn} onClick={() => handleAprobar(m.id)}>✓ Aprobar</button>
-                    <button style={s.rechazarBtn} onClick={() => handleRechazar(m.id)}>✕ Rechazar</button>
-                  </div>
-                </div>
-              ))}
+                ))}
             </div>
-
             <div style={s.seccion}>
               <h3 style={s.seccionTitle}>
                 ✅ Alumnos aprobados
                 {aprobados.length > 0 && <span style={s.badgeGreen}>{aprobados.length}</span>}
               </h3>
-              {aprobados.length === 0 ? (
-                <p style={s.emptyText}>Sin alumnos aprobados aún</p>
-              ) : aprobados.map((m, i) => (
-                <div key={i} style={s.alumnoRowAprobado}>
-                  <span style={s.alumnoAvatar}>👤</span>
-                  <div style={{ flex: 1 }}>
-                    <p style={s.alumnoNombre}>{m.alumnoNombre}</p>
-                    <p style={s.alumnoEmail}>{m.alumnoEmail}</p>
+              {aprobados.length === 0 ? <p style={s.emptyText}>Sin alumnos aprobados aún</p>
+                : aprobados.map((m, i) => (
+                  <div key={i} style={s.alumnoRowAprobado}>
+                    <span style={s.alumnoAvatar}>👤</span>
+                    <div style={{ flex: 1 }}>
+                      <p style={s.alumnoNombre}>{m.alumnoNombre}</p>
+                      <p style={s.alumnoEmail}>{m.alumnoEmail}</p>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <span style={{ color: '#22c55e', fontSize: '13px' }}>✓ Aprobado</span>
+                      <button style={s.expulsarBtn} onClick={() => handleExpulsarAlumno(m)} title="Expulsar">🗑</button>
+                    </div>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <span style={{ color: '#22c55e', fontSize: '13px' }}>✓ Aprobado</span>
-                    <button style={s.expulsarBtn} onClick={() => handleExpulsarAlumno(m)}
-                      title="Expulsar del curso">🗑</button>
-                  </div>
-                </div>
-              ))}
+                ))}
             </div>
-
             <button style={{ ...s.primaryBtn, width: '100%' }} onClick={() => setCursoPendientes(null)}>Cerrar</button>
           </div>
         </div>
@@ -374,26 +349,36 @@ export default function GestionCursos() {
                 <h3 style={{ color: 'rgba(255,255,255,0.6)', fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 12px' }}>
                   Actividades publicadas ({actividades.length})
                 </h3>
-                {actividades.map((a, i) => (
-                  <div key={i} style={s.actividadRow}>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', flexWrap: 'wrap' }}>
-                        <span style={{ color: '#fff', fontWeight: '600', fontSize: '14px' }}>{a.titulo}</span>
-                        <span style={s.tipoBadge}>{a.tipoEvaluacion}</span>
-                        {a.enunciadoNombre && <span style={s.archivoBadge}>📄 {a.enunciadoNombre}</span>}
-                        {a.rubricaId && <span style={s.rubricaBadge}>📋 Rúbrica</span>}
+                {actividades.map((a, i) => {
+                  const fl = fechaLimiteDisplay(a.fechaLimite);
+                  return (
+                    <div key={i} style={s.actividadRow}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', flexWrap: 'wrap' }}>
+                          <span style={{ color: '#fff', fontWeight: '600', fontSize: '14px' }}>{a.titulo}</span>
+                          <span style={s.tipoBadge}>{a.tipoEvaluacion}</span>
+                          {a.enunciadoNombre && <span style={s.archivoBadge}>📄 {a.enunciadoNombre}</span>}
+                          {a.rubricaId && <span style={s.rubricaBadge}>📋 Rúbrica</span>}
+                          {fl && (
+                            <span style={{
+                              background: fl.vencida ? 'rgba(239,68,68,0.15)' : fl.diff <= 2 ? 'rgba(245,158,11,0.15)' : 'rgba(34,197,94,0.1)',
+                              color: fl.vencida ? '#ef4444' : fl.diff <= 2 ? '#f59e0b' : '#22c55e',
+                              padding: '2px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: '600',
+                            }}>
+                              📅 {fl.vencida ? 'Vencida' : `${fl.diff}d restantes`} · {new Date(a.fechaLimite).toLocaleDateString('es-PE')}
+                            </span>
+                          )}
+                        </div>
+                        {a.descripcion && (
+                          <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '12px', margin: 0, lineHeight: '1.4' }}>
+                            {a.descripcion.substring(0, 120)}{a.descripcion.length > 120 ? '…' : ''}
+                          </p>
+                        )}
                       </div>
-                      {a.descripcion && (
-                        <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '12px', margin: 0, lineHeight: '1.4' }}>
-                          {a.descripcion.substring(0, 120)}{a.descripcion.length > 120 ? '…' : ''}
-                        </p>
-                      )}
+                      <button style={s.expulsarBtn} title="Eliminar actividad" onClick={() => handleEliminarActividad(a)}>🗑</button>
                     </div>
-                    {/* Botón eliminar actividad */}
-                    <button style={s.expulsarBtn} title="Eliminar actividad"
-                      onClick={() => handleEliminarActividad(a)}>🗑</button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
 
@@ -423,10 +408,22 @@ export default function GestionCursos() {
                     </select>
                   </div>
                 </div>
-                <div style={{ marginBottom: '16px' }}>
-                  <label style={s.label}>Descripción breve</label>
-                  <input style={s.input} placeholder="Ej: Resolver los ejercicios de los temas 3 y 4"
-                    value={formAct.descripcion} onChange={e => setFormAct(f => ({ ...f, descripcion: e.target.value }))} />
+                <div style={s.grid2}>
+                  <div>
+                    <label style={s.label}>Descripción breve</label>
+                    <input style={s.input} placeholder="Ej: Resolver los ejercicios de los temas 3 y 4"
+                      value={formAct.descripcion} onChange={e => setFormAct(f => ({ ...f, descripcion: e.target.value }))} />
+                  </div>
+                  {/* ✅ FECHA LÍMITE */}
+                  <div>
+                    <label style={s.label}>📅 Fecha límite de entrega</label>
+                    <input style={s.input} type="datetime-local"
+                      value={formAct.fechaLimite}
+                      onChange={e => setFormAct(f => ({ ...f, fechaLimite: e.target.value }))} />
+                    <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px', marginTop: '4px' }}>
+                      Los alumnos verán cuánto tiempo les queda
+                    </p>
+                  </div>
                 </div>
                 <div style={s.enunciadoBox}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>

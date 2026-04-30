@@ -39,7 +39,6 @@ export const getAllAlumnos = async () => {
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 };
 
-// Elimina el documento de Firestore del alumno (no la cuenta de Auth)
 export const eliminarAlumno = (documentId) =>
   deleteDoc(doc(db, 'usuarios', documentId));
 
@@ -199,6 +198,14 @@ export const getEntregasByCurso = async (cursoId) => {
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 };
 
+// Todas las entregas para el dashboard del docente
+export const getTodasEntregas = async () => {
+  const snap = await getDocs(
+    query(collection(db, 'entregas'), orderBy('creadoEn', 'desc'))
+  );
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+};
+
 export const actualizarEntrega = (id, datos) =>
   updateDoc(doc(db, 'entregas', id), { ...datos, evaluadoEn: serverTimestamp() });
 
@@ -224,6 +231,8 @@ export const getTodasEvaluaciones = async () => {
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 };
 
+export const eliminarEvaluacion = (id) => deleteDoc(doc(db, 'evaluaciones', id));
+
 // ─── PONDERADO FINAL ─────────────────────────────────────────────────────────
 
 export const calcularNotaFinal = (entregas, tiposEvaluacion) => {
@@ -239,25 +248,4 @@ export const calcularNotaFinal = (entregas, tiposEvaluacion) => {
   if (pesoUsado === 0) return null;
   if (pesoUsado < 100) notaFinal = notaFinal * (100 / pesoUsado);
   return Math.round(notaFinal * 10) / 10;
-};
-// ─── AGREGAR ESTA FUNCIÓN AL FINAL DE services.js ───────────────────────────
-
-export const crearUsuarioSiNoExiste = async (firebaseUser) => {
-  // Verifica una vez más que no exista
-  const existente = await getUserData(firebaseUser.uid);
-  if (existente) return existente;
-
-  // Crea el documento en Firestore
-  const nuevoUsuario = {
-    uid: firebaseUser.uid,
-    email: firebaseUser.email,
-    nombre: firebaseUser.displayName || firebaseUser.email,
-    rol: 'docente', // Por defecto docente para login con Google
-    creadoEn: serverTimestamp(),
-  };
-
-  await addDoc(collection(db, 'usuarios'), nuevoUsuario);
-
-  // Lo retorna sin el serverTimestamp (aún no resuelto)
-  return { ...nuevoUsuario, creadoEn: new Date() };
 };

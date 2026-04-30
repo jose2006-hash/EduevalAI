@@ -6,7 +6,11 @@ import {
   Chart as ChartJS, CategoryScale, LinearScale, BarElement,
   ArcElement, PointElement, LineElement, Title, Tooltip, Legend
 } from 'chart.js';
-import { getTodasEvaluaciones, getCursos, getAllAlumnos, logoutUser } from '../firebase/services.js';
+import {
+  getTodasEntregas, getTodasEvaluaciones,
+  getCursos, getAllAlumnos, logoutUser,
+  eliminarEntrega, eliminarEvaluacion,
+} from '../firebase/services.js';
 import { useAuth } from '../components/AuthContext.jsx';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, PointElement, LineElement, Title, Tooltip, Legend);
@@ -14,39 +18,41 @@ ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, PointElemen
 export default function DashboardDocente() {
   const { userData } = useAuth();
   const navigate = useNavigate();
-  const [evaluaciones, setEvaluaciones] = useState([]);
+  const [entregas, setEntregas] = useState([]);
   const [cursos, setCursos] = useState([]);
   const [alumnos, setAlumnos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [confirm, setConfirm] = useState(null); // { id, nombre }
 
-  useEffect(() => {
-    const load = async () => {
-      const [evs, crs, alms] = await Promise.all([
-        getTodasEvaluaciones(), getCursos(), getAllAlumnos()
-      ]);
-      setEvaluaciones(evs);
-      setCursos(crs);
-      setAlumnos(alms);
-      setLoading(false);
-    };
-    load();
-  }, []);
+  useEffect(() => { cargar(); }, []);
 
+  const cargar = async () => {
+    const [ents, crs, alms] = await Promise.all([
+      getTodasEntregas(), getCursos(), getAllAlumnos()
+    ]);
+    setEntregas(ents);
+    setCursos(crs);
+    setAlumnos(alms);
+    setLoading(false);
+  };
+
+  // Stats basadas en entregas evaluadas
+  const evaluadas = entregas.filter(e => e.estado === 'evaluado');
   const stats = {
-    total: evaluaciones.length,
-    promedio: evaluaciones.length
-      ? (evaluaciones.reduce((s, e) => s + (e.notaFinal || 0), 0) / evaluaciones.length).toFixed(1)
+    total: entregas.length,
+    promedio: evaluadas.length
+      ? (evaluadas.reduce((s, e) => s + (e.notaFinal || 0), 0) / evaluadas.length).toFixed(1)
       : 0,
-    aprobados: evaluaciones.filter(e => (e.notaFinal || 0) >= 11).length,
-    desaprobados: evaluaciones.filter(e => (e.notaFinal || 0) < 11).length,
+    aprobados: evaluadas.filter(e => (e.notaFinal || 0) >= 11).length,
+    desaprobados: evaluadas.filter(e => (e.notaFinal || 0) < 11).length,
   };
 
   const distribucion = {
-    Excelente: evaluaciones.filter(e => e.notaFinal >= 18).length,
-    Bueno: evaluaciones.filter(e => e.notaFinal >= 14 && e.notaFinal < 18).length,
-    Regular: evaluaciones.filter(e => e.notaFinal >= 11 && e.notaFinal < 14).length,
-    Insuficiente: evaluaciones.filter(e => e.notaFinal < 11).length,
+    Excelente: evaluadas.filter(e => e.notaFinal >= 18).length,
+    Bueno: evaluadas.filter(e => e.notaFinal >= 14 && e.notaFinal < 18).length,
+    Regular: evaluadas.filter(e => e.notaFinal >= 11 && e.notaFinal < 14).length,
+    Insuficiente: evaluadas.filter(e => e.notaFinal < 11).length,
   };
 
   const doughnutData = {
@@ -63,7 +69,7 @@ export default function DashboardDocente() {
     datasets: [{
       label: 'Nota Final',
       data: alumnos.slice(0, 10).map(a => {
-        const ev = evaluaciones.find(e => e.alumnoUid === a.uid);
+        const ev = evaluadas.find(e => e.alumnoUid === a.uid);
         return ev?.notaFinal || 0;
       }),
       backgroundColor: 'rgba(102, 126, 234, 0.8)',
@@ -78,6 +84,13 @@ export default function DashboardDocente() {
       x: { ticks: { color: 'rgba(255,255,255,0.6)' }, grid: { color: 'rgba(255,255,255,0.05)' } },
       y: { ticks: { color: 'rgba(255,255,255,0.6)' }, grid: { color: 'rgba(255,255,255,0.05)' }, max: 20 }
     }
+  };
+
+  const handleEliminar = async () => {
+    if (!confirm) return;
+    await eliminarEntrega(confirm.id);
+    setEntregas(prev => prev.filter(e => e.id !== confirm.id));
+    setConfirm(null);
   };
 
   const handleLogout = async () => { await logoutUser(); navigate('/login'); };
@@ -97,11 +110,9 @@ export default function DashboardDocente() {
             { id: 'alumnos',   icon: '👥', label: 'Alumnos' },
             { id: 'reportes',  icon: '📈', label: 'Reportes' },
           ].map(item => (
-            <button
-              key={item.id}
+            <button key={item.id}
               style={{ ...styles.navItem, ...(activeTab === item.id ? styles.navItemActive : {}) }}
-              onClick={() => activeTab === item.id ? null : navigate(`/${item.id}`)}
-            >
+              onClick={() => activeTab === item.id ? null : navigate(`/${item.id}`)}>
               <span>{item.icon}</span> {item.label}
             </button>
           ))}
@@ -116,7 +127,6 @@ export default function DashboardDocente() {
             <h1 style={styles.pageTitle}>Dashboard</h1>
             <p style={styles.pageSubtitle}>Bienvenido, {userData?.nombre || 'Docente'}</p>
           </div>
-          {/* ✅ Botón ahora lleva a Cursos, no a Evaluar */}
           <button style={styles.ctaBtn} onClick={() => navigate('/cursos')}>
             📚 Ir a mis cursos
           </button>
@@ -124,10 +134,10 @@ export default function DashboardDocente() {
 
         <div style={styles.statsGrid}>
           {[
-            { label: 'Total Evaluaciones', value: stats.total,            icon: '📝', color: '#667eea' },
-            { label: 'Promedio Clase',     value: `${stats.promedio}/20`, icon: '⭐', color: '#22c55e' },
-            { label: 'Aprobados',          value: stats.aprobados,        icon: '✅', color: '#3b82f6' },
-            { label: 'Desaprobados',       value: stats.desaprobados,     icon: '❌', color: '#ef4444' },
+            { label: 'Total Entregas',    value: stats.total,            icon: '📝', color: '#667eea' },
+            { label: 'Promedio Clase',    value: `${stats.promedio}/20`, icon: '⭐', color: '#22c55e' },
+            { label: 'Aprobados',         value: stats.aprobados,        icon: '✅', color: '#3b82f6' },
+            { label: 'Desaprobados',      value: stats.desaprobados,     icon: '❌', color: '#ef4444' },
           ].map((s, i) => (
             <div key={i} style={{ ...styles.statCard, borderTop: `3px solid ${s.color}` }}>
               <div style={styles.statIcon}>{s.icon}</div>
@@ -148,48 +158,88 @@ export default function DashboardDocente() {
           </div>
         </div>
 
+        {/* Tabla entregas recientes con botón eliminar */}
         <div style={styles.tableCard}>
-          <h3 style={styles.chartTitle}>Evaluaciones Recientes</h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+            <h3 style={{ ...styles.chartTitle, margin: 0 }}>Evaluaciones Recientes</h3>
+            <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px' }}>
+              {entregas.length} entrega{entregas.length !== 1 ? 's' : ''} en total
+            </span>
+          </div>
           <div style={{ overflowX: 'auto' }}>
             <table style={styles.table}>
               <thead>
                 <tr>
-                  {['Alumno', 'Tema', 'Curso', 'Nota', 'Nivel', 'Fecha'].map(h => (
+                  {['Alumno', 'Trabajo', 'Curso', 'Tipo', 'Nota', 'Nivel', 'Fecha', ''].map(h => (
                     <th key={h} style={styles.th}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {evaluaciones.slice(0, 8).map((ev, i) => (
+                {entregas.slice(0, 12).map((ev, i) => (
                   <tr key={i} style={styles.tr}>
                     <td style={styles.td}>{ev.alumnoNombre || '—'}</td>
-                    <td style={styles.td}>{ev.titulo || ev.tema || '—'}</td>
+                    <td style={styles.td}>
+                      <span style={{ maxWidth: '140px', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {ev.titulo || '—'}
+                      </span>
+                    </td>
                     <td style={styles.td}>{ev.cursoNombre || '—'}</td>
                     <td style={styles.td}>
-                      <span style={{
-                        ...styles.badge,
-                        background: ev.notaFinal >= 14 ? '#22c55e33' : ev.notaFinal >= 11 ? '#f59e0b33' : '#ef444433',
-                        color:      ev.notaFinal >= 14 ? '#22c55e'   : ev.notaFinal >= 11 ? '#f59e0b'   : '#ef4444',
-                      }}>
-                        {ev.notaFinal}/20
-                      </span>
+                      <span style={styles.tipoBadge}>{ev.tipoEvaluacion || '—'}</span>
+                    </td>
+                    <td style={styles.td}>
+                      {ev.estado === 'evaluado' ? (
+                        <span style={{
+                          ...styles.badge,
+                          background: ev.notaFinal >= 14 ? '#22c55e33' : ev.notaFinal >= 11 ? '#f59e0b33' : '#ef444433',
+                          color:      ev.notaFinal >= 14 ? '#22c55e'   : ev.notaFinal >= 11 ? '#f59e0b'   : '#ef4444',
+                        }}>
+                          {ev.notaFinal}/20
+                        </span>
+                      ) : (
+                        <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px' }}>⏳ Pendiente</span>
+                      )}
                     </td>
                     <td style={styles.td}>{ev.nivelGlobal || '—'}</td>
                     <td style={styles.td}>
                       {ev.creadoEn?.toDate?.()?.toLocaleDateString('es-PE') || '—'}
                     </td>
+                    <td style={styles.td}>
+                      <button style={styles.deleteBtn} title="Eliminar entrega"
+                        onClick={() => setConfirm({ id: ev.id, nombre: ev.titulo || ev.alumnoNombre })}>
+                        🗑
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            {evaluaciones.length === 0 && (
+            {entregas.length === 0 && (
               <p style={{ color: 'rgba(255,255,255,0.4)', textAlign: 'center', padding: '40px' }}>
-                Aún no hay evaluaciones registradas
+                Aún no hay entregas registradas
               </p>
             )}
           </div>
         </div>
       </main>
+
+      {/* Modal confirmación */}
+      {confirm && (
+        <div style={styles.overlay}>
+          <div style={styles.confirmModal}>
+            <p style={{ fontSize: '40px', margin: '0 0 12px' }}>🗑️</p>
+            <h3 style={{ color: '#fff', fontSize: '18px', margin: '0 0 8px' }}>Eliminar entrega</h3>
+            <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '14px', margin: '0 0 24px', lineHeight: '1.5' }}>
+              ¿Eliminar <strong style={{ color: '#fff' }}>"{confirm.nombre}"</strong>? Esta acción no se puede deshacer.
+            </p>
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+              <button style={styles.cancelBtn} onClick={() => setConfirm(null)}>Cancelar</button>
+              <button style={styles.dangerBtn} onClick={handleEliminar}>Sí, eliminar</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -200,7 +250,7 @@ const styles = {
   sidebar: { width: '240px', background: 'rgba(255,255,255,0.04)', borderRight: '1px solid rgba(255,255,255,0.08)', padding: '32px 16px', display: 'flex', flexDirection: 'column', gap: '8px', flexShrink: 0 },
   sidebarLogo: { color: '#fff', fontSize: '20px', fontWeight: '700', padding: '0 12px 24px' },
   nav: { display: 'flex', flexDirection: 'column', gap: '4px', flex: 1 },
-  navItem: { display: 'flex', gap: '12px', alignItems: 'center', padding: '12px 16px', borderRadius: '12px', color: 'rgba(255,255,255,0.5)', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '14px', fontWeight: '500', textAlign: 'left', transition: 'all 0.2s' },
+  navItem: { display: 'flex', gap: '12px', alignItems: 'center', padding: '12px 16px', borderRadius: '12px', color: 'rgba(255,255,255,0.5)', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '14px', fontWeight: '500', textAlign: 'left' },
   navItemActive: { background: 'rgba(102,126,234,0.2)', color: '#a78bfa' },
   logoutBtn: { display: 'flex', gap: '8px', alignItems: 'center', padding: '12px 16px', borderRadius: '12px', color: 'rgba(255,255,255,0.4)', background: 'transparent', border: '1px solid rgba(255,255,255,0.08)', cursor: 'pointer', fontSize: '14px', marginTop: 'auto' },
   main: { flex: 1, padding: '40px', overflowY: 'auto' },
@@ -218,8 +268,14 @@ const styles = {
   chartTitle: { color: '#fff', fontSize: '16px', fontWeight: '600', margin: '0 0 20px' },
   tableCard: { background: 'rgba(255,255,255,0.04)', borderRadius: '16px', padding: '24px', border: '1px solid rgba(255,255,255,0.08)' },
   table: { width: '100%', borderCollapse: 'collapse' },
-  th: { color: 'rgba(255,255,255,0.4)', fontSize: '12px', fontWeight: '600', textAlign: 'left', padding: '8px 12px', textTransform: 'uppercase', letterSpacing: '0.05em' },
+  th: { color: 'rgba(255,255,255,0.4)', fontSize: '11px', fontWeight: '600', textAlign: 'left', padding: '8px 12px', textTransform: 'uppercase', letterSpacing: '0.05em' },
   tr: { borderBottom: '1px solid rgba(255,255,255,0.05)' },
-  td: { color: 'rgba(255,255,255,0.8)', fontSize: '14px', padding: '12px 12px' },
+  td: { color: 'rgba(255,255,255,0.8)', fontSize: '13px', padding: '12px' },
   badge: { padding: '4px 10px', borderRadius: '8px', fontSize: '13px', fontWeight: '600' },
+  tipoBadge: { background: 'rgba(102,126,234,0.15)', color: '#a78bfa', padding: '3px 8px', borderRadius: '6px', fontSize: '11px', whiteSpace: 'nowrap' },
+  deleteBtn: { background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.2)', color: '#ef4444', borderRadius: '8px', cursor: 'pointer', padding: '5px 9px', fontSize: '14px' },
+  overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 },
+  confirmModal: { background: '#1a1535', borderRadius: '20px', padding: '36px', width: '100%', maxWidth: '420px', border: '1px solid rgba(255,255,255,0.1)', textAlign: 'center' },
+  cancelBtn: { padding: '12px 24px', borderRadius: '12px', background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.7)', border: '1px solid rgba(255,255,255,0.12)', cursor: 'pointer', fontSize: '14px' },
+  dangerBtn: { padding: '12px 24px', borderRadius: '12px', background: 'rgba(239,68,68,0.2)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.4)', cursor: 'pointer', fontWeight: '600', fontSize: '14px' },
 };
