@@ -34,13 +34,12 @@ export const getUserData = async (uid) => {
 };
 
 // Crea el documento en Firestore si el usuario existe en Auth pero no en Firestore
-// (por ejemplo: cuentas antiguas o creadas manualmente)
 export const crearUsuarioSiNoExiste = async (firebaseUser) => {
   const data = {
     uid: firebaseUser.uid,
     email: firebaseUser.email,
     nombre: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Usuario',
-    rol: 'alumno', // mínimo privilegio por defecto
+    rol: 'alumno',
     creadoEn: serverTimestamp(),
   };
   const ref = await addDoc(collection(db, 'usuarios'), data);
@@ -195,8 +194,12 @@ export const eliminarRubrica = (id) => deleteDoc(doc(db, 'rubricas', id));
 
 // ─── ENTREGAS ────────────────────────────────────────────────────────────────
 
-export const crearEntrega = (entrega) =>
-  addDoc(collection(db, 'entregas'), { ...entrega, creadoEn: serverTimestamp() });
+export const crearEntrega = async (entrega) => {
+  const ref = await addDoc(collection(db, 'entregas'), {
+    ...entrega, creadoEn: serverTimestamp(),
+  });
+  return { id: ref.id, ...entrega };
+};
 
 export const getEntregasByAlumnoYCurso = async (alumnoUid, cursoId) => {
   const q = query(collection(db, 'entregas'),
@@ -221,6 +224,24 @@ export const getTodasEntregas = async () => {
 
 export const actualizarEntrega = (id, datos) =>
   updateDoc(doc(db, 'entregas', id), { ...datos, evaluadoEn: serverTimestamp() });
+
+// Alias usado por CursoAlumno para editar una entrega existente
+export const actualizarEntregaAlumno = (id, datos) =>
+  updateDoc(doc(db, 'entregas', id), { ...datos, modificadoEn: serverTimestamp() });
+
+// Firebase Storage no está habilitado — el PDF se guarda como texto extraído.
+// Esta función devuelve vacío para que el flujo no rompa.
+export const subirPdfEntrega = async ({ file, entregaId, alumnoUid, cursoId }) => {
+  // Sin Storage configurado: solo guardamos el nombre del archivo.
+  // El contenido ya fue extraído como texto y guardado en `texto`.
+  return { archivoNombre: file?.name || null, archivoUrl: null };
+};
+
+// Sin Storage: no hay archivo remoto que borrar, solo limpiamos los campos en Firestore.
+export const eliminarArchivoEntrega = async (archivoPath) => {
+  // No-op: sin Firebase Storage no hay nada que borrar en remoto.
+  return;
+};
 
 export const eliminarEntrega = (id) => deleteDoc(doc(db, 'entregas', id));
 
