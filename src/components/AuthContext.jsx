@@ -13,18 +13,19 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
-      setUser(firebaseUser);
       if (firebaseUser) {
+        setUser(firebaseUser);
         let data = await getUserData(firebaseUser.uid);
 
-        // Si no existe en Firestore (ej: primer login),
-        // lo creamos automáticamente como 'alumno' (mínimo privilegio)
+        // Si no existe en Firestore (cuenta vieja o creada sin pasar por registerUser),
+        // se crea automáticamente como 'alumno' (mínimo privilegio)
         if (!data) {
           data = await crearUsuarioSiNoExiste(firebaseUser);
         }
 
         setUserData(data);
       } else {
+        setUser(null);
         setUserData(null);
       }
       setLoading(false);
