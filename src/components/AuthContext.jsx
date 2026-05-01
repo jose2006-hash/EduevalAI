@@ -17,8 +17,8 @@ export const AuthProvider = ({ children }) => {
       if (firebaseUser) {
         let data = await getUserData(firebaseUser.uid);
 
-        // Si no existe en Firestore (ej: login con Google por primera vez),
-        // lo creamos automáticamente como 'docente'
+        // Si no existe en Firestore (ej: primer login),
+        // lo creamos automáticamente como 'alumno' (mínimo privilegio)
         if (!data) {
           data = await crearUsuarioSiNoExiste(firebaseUser);
         }

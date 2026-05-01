@@ -55,7 +55,7 @@ export const getAllAlumnos = async () => {
 export const eliminarAlumno = (documentId) =>
   deleteDoc(doc(db, 'usuarios', documentId));
 
-export const crearUsuarioSiNoExiste = async (firebaseUser, rol = 'docente') => {
+export const crearUsuarioSiNoExiste = async (firebaseUser, rol = 'alumno') => {
   if (!firebaseUser?.uid) throw new Error('Usuario inválido');
   const existing = await getUserData(firebaseUser.uid);
   if (existing) return existing;
