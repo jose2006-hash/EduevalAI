@@ -6,6 +6,7 @@ import {
   getMatriculasByCurso, getPendientesByCurso,
   aprobarMatricula, rechazarMatricula, eliminarMatricula,
   crearActividad, getActividadesByCurso, eliminarActividad,
+  getEntregasByCurso, eliminarEntrega,
   getRubricas,
 } from '../firebase/services.js';
 import { useAuth } from '../components/AuthContext.jsx';
@@ -29,6 +30,7 @@ export default function GestionCursos() {
   const [aprobados, setAprobados] = useState([]);
   const [confirm, setConfirm] = useState(null);
 
+  // Actividades
   const [cursoActividades, setCursoActividades] = useState(null);
   const [actividades, setActividades] = useState([]);
   const [rubricas, setRubricas] = useState([]);
@@ -37,10 +39,16 @@ export default function GestionCursos() {
   const [msgAct, setMsgAct] = useState('');
   const [formAct, setFormAct] = useState({
     titulo: '', tipoEvaluacion: '', descripcion: '',
-    enunciadoTexto: '', enunciadoNombre: '', rubricaId: '',
-    fechaLimite: '',
+    enunciadoTexto: '', enunciadoNombre: '', rubricaId: '', fechaLimite: '',
   });
   const [leyendoAct, setLeyendoAct] = useState(false);
+
+  // ✅ NUEVO: ver entregas de alumnos
+  const [cursoEntregas, setCursoEntregas] = useState(null);
+  const [entregas, setEntregas] = useState([]);
+  const [entregaDetalle, setEntregaDetalle] = useState(null);
+  const [filtroAlumno, setFiltroAlumno] = useState('');
+  const [filtroTipo, setFiltroTipo] = useState('');
 
   const [form, setForm] = useState({
     nombre: '', seccion: '', codigo: '', descripcion: '', ciclo: '',
@@ -67,10 +75,10 @@ export default function GestionCursos() {
 
   const handleAprobar = async (id) => { await aprobarMatricula(id); await abrirSolicitudes(cursoPendientes); };
   const handleRechazar = async (id) => { await rechazarMatricula(id); await abrirSolicitudes(cursoPendientes); };
-
   const handleExpulsarAlumno = (m) => setConfirm({ tipo: 'alumno', id: m.id, nombre: m.alumnoNombre });
   const handleEliminarActividad = (a) => setConfirm({ tipo: 'actividad', id: a.id, nombre: a.titulo });
   const handleEliminarCurso = (c) => setConfirm({ tipo: 'curso', id: c.id, nombre: c.nombre });
+  const handleEliminarEntregaDocente = (e) => setConfirm({ tipo: 'entrega', id: e.id, nombre: `${e.alumnoNombre} — ${e.titulo}` });
 
   const ejecutarConfirm = async () => {
     if (!confirm) return;
@@ -88,11 +96,28 @@ export default function GestionCursos() {
         await eliminarCurso(confirm.id);
         await cargarCursos();
         setMsg('✅ Curso eliminado');
+      } else if (confirm.tipo === 'entrega') {
+        await eliminarEntrega(confirm.id);
+        setEntregaDetalle(null);
+        const ents = await getEntregasByCurso(cursoEntregas.id);
+        setEntregas(ents);
+        setMsg('✅ Entrega eliminada');
       }
     } catch (err) { setMsg('❌ Error: ' + err.message); }
     setConfirm(null);
   };
 
+  // ── Abrir entregas del curso ───────────────────────────────────────────────
+  const abrirEntregas = async (curso) => {
+    setCursoEntregas(curso);
+    setFiltroAlumno(''); setFiltroTipo(''); setEntregaDetalle(null);
+    const ents = await getEntregasByCurso(curso.id);
+    // Ordenar: más recientes primero
+    ents.sort((a, b) => (b.creadoEn?.seconds || 0) - (a.creadoEn?.seconds || 0));
+    setEntregas(ents);
+  };
+
+  // ── Actividades ────────────────────────────────────────────────────────────
   const abrirActividades = async (curso) => {
     setCursoActividades(curso);
     setShowActForm(false); setMsgAct('');
@@ -185,7 +210,6 @@ export default function GestionCursos() {
     finally { setGuardando(false); }
   };
 
-  // Helper para mostrar fecha límite con color si está vencida
   const fechaLimiteDisplay = (fechaStr) => {
     if (!fechaStr) return null;
     const fecha = new Date(fechaStr);
@@ -194,6 +218,25 @@ export default function GestionCursos() {
     const diff = Math.ceil((fecha - hoy) / (1000 * 60 * 60 * 24));
     return { fecha, vencida, diff };
   };
+
+  const nivelColor = (nota) => {
+    if (!nota && nota !== 0) return '#667eea';
+    if (nota >= 17) return '#22c55e';
+    if (nota >= 14) return '#3b82f6';
+    if (nota >= 11) return '#f59e0b';
+    return '#ef4444';
+  };
+
+  // Entregas filtradas
+  const entregasFiltradas = entregas.filter(e => {
+    const matchAlumno = !filtroAlumno || e.alumnoNombre?.toLowerCase().includes(filtroAlumno.toLowerCase());
+    const matchTipo = !filtroTipo || e.tipoEvaluacion === filtroTipo;
+    return matchAlumno && matchTipo;
+  });
+
+  // Alumnos únicos para el filtro
+  const alumnosUnicos = [...new Set(entregas.map(e => e.alumnoNombre).filter(Boolean))];
+  const tiposUnicos = [...new Set(entregas.map(e => e.tipoEvaluacion).filter(Boolean))];
 
   return (
     <div style={s.container}>
@@ -232,8 +275,16 @@ export default function GestionCursos() {
               <p style={s.infoValue}>Código: <strong style={{ color: '#a78bfa' }}>{c.codigo}</strong> + nombre del profesor</p>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px' }}>
-              <button style={s.actividadesBtn} onClick={() => abrirActividades(c)}>📝 Actividades y enunciados</button>
-              <button style={s.solicitudesBtn} onClick={() => abrirSolicitudes(c)}>👥 Ver alumnos y solicitudes</button>
+              {/* ✅ NUEVO botón ver entregas */}
+              <button style={s.entregasBtn} onClick={() => abrirEntregas(c)}>
+                📋 Ver entregas de alumnos
+              </button>
+              <button style={s.actividadesBtn} onClick={() => abrirActividades(c)}>
+                📝 Actividades y enunciados
+              </button>
+              <button style={s.solicitudesBtn} onClick={() => abrirSolicitudes(c)}>
+                👥 Ver alumnos y solicitudes
+              </button>
             </div>
           </div>
         ))}
@@ -251,7 +302,8 @@ export default function GestionCursos() {
             <p style={{ fontSize: '40px', margin: '0 0 12px' }}>⚠️</p>
             <h3 style={{ color: '#fff', fontSize: '18px', margin: '0 0 8px' }}>
               {confirm.tipo === 'alumno' ? 'Eliminar alumno' :
-               confirm.tipo === 'actividad' ? 'Eliminar actividad' : 'Eliminar curso'}
+               confirm.tipo === 'actividad' ? 'Eliminar actividad' :
+               confirm.tipo === 'entrega' ? 'Eliminar entrega' : 'Eliminar curso'}
             </h3>
             <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '14px', margin: '0 0 24px', lineHeight: '1.5' }}>
               ¿Eliminar <strong style={{ color: '#fff' }}>"{confirm.nombre}"</strong>? Esta acción no se puede deshacer.
@@ -259,6 +311,203 @@ export default function GestionCursos() {
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
               <button style={s.secondaryBtn} onClick={() => setConfirm(null)}>Cancelar</button>
               <button style={s.dangerBtn} onClick={ejecutarConfirm}>Sí, eliminar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal entregas de alumnos ── */}
+      {cursoEntregas && !entregaDetalle && (
+        <div style={s.overlay}>
+          <div style={{ ...s.modal, maxWidth: '900px' }}>
+            <div style={s.modalHeader}>
+              <div>
+                <h2 style={s.modalTitle}>📋 Entregas — {cursoEntregas.nombre}</h2>
+                <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '13px', margin: 0 }}>
+                  Sección {cursoEntregas.seccion} · {cursoEntregas.ciclo} · {entregas.length} entrega{entregas.length !== 1 ? 's' : ''}
+                </p>
+              </div>
+              <button style={s.closeBtn} onClick={() => setCursoEntregas(null)}>✕</button>
+            </div>
+
+            {/* Filtros */}
+            <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
+              <input style={{ ...s.input, flex: 1, minWidth: '160px' }}
+                placeholder="🔍 Buscar alumno..."
+                value={filtroAlumno}
+                onChange={e => setFiltroAlumno(e.target.value)} />
+              <select style={{ ...s.select, width: '180px' }} value={filtroTipo}
+                onChange={e => setFiltroTipo(e.target.value)}>
+                <option value="">Todos los tipos</option>
+                {tiposUnicos.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+
+            {entregasFiltradas.length === 0 ? (
+              <p style={{ color: 'rgba(255,255,255,0.3)', textAlign: 'center', padding: '40px' }}>
+                No hay entregas{filtroAlumno || filtroTipo ? ' con ese filtro' : ' aún'}
+              </p>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={s.table}>
+                  <thead>
+                    <tr>
+                      {['Alumno', 'Trabajo', 'Tipo', 'Nota', 'Nivel', 'Fecha', ''].map(h => (
+                        <th key={h} style={s.th}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {entregasFiltradas.map((e, i) => (
+                      <tr key={i} style={{ ...s.tr, cursor: 'pointer' }}
+                        onClick={() => setEntregaDetalle(e)}>
+                        <td style={s.td}>
+                          <span style={{ color: '#fff', fontWeight: '500' }}>{e.alumnoNombre || '—'}</span>
+                        </td>
+                        <td style={s.td}>
+                          <span style={{ maxWidth: '160px', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {e.titulo || '—'}
+                          </span>
+                        </td>
+                        <td style={s.td}>
+                          <span style={s.tipoBadge}>{e.tipoEvaluacion || '—'}</span>
+                        </td>
+                        <td style={s.td}>
+                          {e.estado === 'evaluado' ? (
+                            <span style={{
+                              ...s.badge,
+                              background: e.notaFinal >= 14 ? '#22c55e33' : e.notaFinal >= 11 ? '#f59e0b33' : '#ef444433',
+                              color: e.notaFinal >= 14 ? '#22c55e' : e.notaFinal >= 11 ? '#f59e0b' : '#ef4444',
+                            }}>
+                              {e.notaFinal}/20
+                            </span>
+                          ) : (
+                            <span style={{ color: '#f59e0b', fontSize: '12px' }}>⏳ Pendiente</span>
+                          )}
+                        </td>
+                        <td style={s.td}>{e.nivelGlobal || '—'}</td>
+                        <td style={s.td}>
+                          {e.creadoEn?.toDate?.()?.toLocaleDateString('es-PE') || '—'}
+                        </td>
+                        <td style={s.td} onClick={ev => ev.stopPropagation()}>
+                          <button style={s.expulsarBtn} title="Eliminar entrega"
+                            onClick={() => handleEliminarEntregaDocente(e)}>🗑</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <button style={{ ...s.primaryBtn, width: '100%', marginTop: '20px' }}
+              onClick={() => setCursoEntregas(null)}>Cerrar</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal detalle entrega (docente ve el trabajo completo) ── */}
+      {entregaDetalle && (
+        <div style={s.overlay}>
+          <div style={{ ...s.modal, maxWidth: '780px' }}>
+            <div style={s.modalHeader}>
+              <div>
+                <h2 style={s.modalTitle}>{entregaDetalle.titulo}</h2>
+                <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '13px', margin: 0 }}>
+                  👤 {entregaDetalle.alumnoNombre} · {entregaDetalle.tipoEvaluacion}
+                  {entregaDetalle.actividadTitulo && ` · ${entregaDetalle.actividadTitulo}`}
+                  {entregaDetalle.rubricaNombre && ` · 📋 ${entregaDetalle.rubricaNombre}`}
+                </p>
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button style={s.expulsarBtn} title="Eliminar entrega"
+                  onClick={() => handleEliminarEntregaDocente(entregaDetalle)}>🗑</button>
+                <button style={s.closeBtn} onClick={() => setEntregaDetalle(null)}>✕</button>
+              </div>
+            </div>
+
+            {/* Nota */}
+            <div style={{ textAlign: 'center', padding: '16px 0', borderBottom: '1px solid rgba(255,255,255,0.06)', marginBottom: '20px' }}>
+              {entregaDetalle.estado === 'evaluado' ? (
+                <>
+                  <div style={{ fontSize: '48px', fontWeight: '800', color: nivelColor(entregaDetalle.notaFinal) }}>
+                    {entregaDetalle.notaFinal}<span style={{ fontSize: '20px', opacity: 0.5 }}>/20</span>
+                  </div>
+                  <div style={{ color: nivelColor(entregaDetalle.notaFinal), fontWeight: '600', fontSize: '16px' }}>
+                    {entregaDetalle.nivelGlobal}
+                  </div>
+                </>
+              ) : (
+                <span style={{ color: '#f59e0b', fontSize: '16px' }}>⏳ Sin evaluar</span>
+              )}
+            </div>
+
+            {/* Criterios */}
+            {entregaDetalle.criterios?.length > 0 && (
+              <div style={{ marginBottom: '20px' }}>
+                <h3 style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 12px' }}>
+                  Detalle por criterios
+                </h3>
+                {entregaDetalle.criterios.map((c, i) => (
+                  <div key={i} style={{ marginBottom: '12px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                      <span style={{ color: '#fff', fontSize: '13px', fontWeight: '500' }}>{c.nombre}</span>
+                      <span style={{ color: nivelColor(c.puntajeObtenido / c.puntajeMaximo * 20), fontWeight: '600', fontSize: '13px' }}>
+                        {c.puntajeObtenido}/{c.puntajeMaximo} — {c.nivel}
+                      </span>
+                    </div>
+                    <div style={{ height: '5px', background: 'rgba(255,255,255,0.08)', borderRadius: '3px', overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${(c.puntajeObtenido / c.puntajeMaximo) * 100}%`, background: nivelColor(c.puntajeObtenido / c.puntajeMaximo * 20), borderRadius: '3px' }} />
+                    </div>
+                    <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '11px', margin: '3px 0 0' }}>{c.comentario}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Retroalimentación */}
+            {entregaDetalle.retroalimentacionGeneral && (
+              <div style={{ background: 'rgba(102,126,234,0.08)', borderRadius: '10px', padding: '14px', marginBottom: '16px' }}>
+                <p style={{ color: '#a78bfa', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 6px' }}>Retroalimentación IA</p>
+                <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: '13px', lineHeight: '1.6', margin: 0 }}>
+                  {entregaDetalle.retroalimentacionGeneral}
+                </p>
+              </div>
+            )}
+
+            {/* Trabajo del alumno */}
+            <div style={s.trabajoBox}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', margin: 0 }}>
+                  📄 Trabajo del alumno
+                  {entregaDetalle.archivoNombre && ` — ${entregaDetalle.archivoNombre}`}
+                </p>
+                {entregaDetalle.archivoUrl && (
+                  <a href={entregaDetalle.archivoUrl} target="_blank" rel="noreferrer"
+                    style={{ color: '#a78bfa', fontSize: '12px', fontWeight: '600', textDecoration: 'none' }}>
+                    Abrir PDF →
+                  </a>
+                )}
+              </div>
+              {entregaDetalle.archivoUrl ? (
+                <iframe
+                  title="PDF alumno"
+                  src={entregaDetalle.archivoUrl}
+                  style={{ width: '100%', height: '400px', border: 'none', borderRadius: '8px', background: '#0f0c29' }}
+                />
+              ) : entregaDetalle.texto ? (
+                <div style={s.textoTrabajo}>
+                  {entregaDetalle.texto}
+                </div>
+              ) : (
+                <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '13px' }}>Sin contenido disponible</p>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px', marginTop: '20px' }}>
+              <button style={s.secondaryBtn} onClick={() => setEntregaDetalle(null)}>
+                ← Volver a lista
+              </button>
             </div>
           </div>
         </div>
@@ -337,13 +586,11 @@ export default function GestionCursos() {
               </div>
               <button style={s.closeBtn} onClick={() => { setCursoActividades(null); setShowActForm(false); }}>✕</button>
             </div>
-
             {msgAct && (
               <div style={{ color: msgAct.includes('✅') ? '#22c55e' : '#ef4444', marginBottom: '16px', fontSize: '13px', background: msgAct.includes('✅') ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)', padding: '10px 14px', borderRadius: '8px' }}>
                 {msgAct}
               </div>
             )}
-
             {actividades.length > 0 && (
               <div style={{ marginBottom: '20px' }}>
                 <h3 style={{ color: 'rgba(255,255,255,0.6)', fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 12px' }}>
@@ -381,13 +628,11 @@ export default function GestionCursos() {
                 })}
               </div>
             )}
-
             {actividades.length === 0 && !showActForm && (
               <div style={{ textAlign: 'center', padding: '32px 0', color: 'rgba(255,255,255,0.3)', fontSize: '14px' }}>
                 No hay actividades publicadas aún
               </div>
             )}
-
             {showActForm ? (
               <div style={s.actForm}>
                 <h3 style={{ color: '#fff', fontSize: '15px', fontWeight: '600', margin: '0 0 16px' }}>Nueva actividad</h3>
@@ -414,7 +659,6 @@ export default function GestionCursos() {
                     <input style={s.input} placeholder="Ej: Resolver los ejercicios de los temas 3 y 4"
                       value={formAct.descripcion} onChange={e => setFormAct(f => ({ ...f, descripcion: e.target.value }))} />
                   </div>
-                  {/* ✅ FECHA LÍMITE */}
                   <div>
                     <label style={s.label}>📅 Fecha límite de entrega</label>
                     <input style={s.input} type="datetime-local"
@@ -574,6 +818,7 @@ const s = {
   infoBox: { background: 'rgba(102,126,234,0.06)', border: '1px solid rgba(102,126,234,0.15)', borderRadius: '10px', padding: '10px 14px' },
   infoLabel: { color: 'rgba(255,255,255,0.35)', fontSize: '11px', margin: '0 0 4px', textTransform: 'uppercase', letterSpacing: '0.05em' },
   infoValue: { color: '#a78bfa', fontSize: '12px', margin: 0 },
+  entregasBtn: { width: '100%', padding: '10px', borderRadius: '10px', background: 'linear-gradient(135deg,rgba(34,197,94,0.2),rgba(16,185,129,0.2))', border: '1px solid rgba(34,197,94,0.3)', color: '#34d399', cursor: 'pointer', fontSize: '13px', fontWeight: '600' },
   actividadesBtn: { width: '100%', padding: '10px', borderRadius: '10px', background: 'linear-gradient(135deg,rgba(102,126,234,0.25),rgba(118,75,162,0.25))', border: '1px solid rgba(102,126,234,0.35)', color: '#a78bfa', cursor: 'pointer', fontSize: '13px', fontWeight: '600' },
   solicitudesBtn: { width: '100%', padding: '10px', borderRadius: '10px', background: 'rgba(102,126,234,0.08)', border: '1px solid rgba(102,126,234,0.15)', color: 'rgba(167,139,250,0.7)', cursor: 'pointer', fontSize: '13px', fontWeight: '500' },
   overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 1000, overflowY: 'auto', padding: '32px' },
@@ -602,6 +847,15 @@ const s = {
   actForm: { background: 'rgba(255,255,255,0.03)', borderRadius: '14px', padding: '20px', border: '1px solid rgba(255,255,255,0.08)' },
   enunciadoBox: { background: 'rgba(102,126,234,0.06)', border: '1px solid rgba(102,126,234,0.15)', borderRadius: '12px', padding: '16px', marginBottom: '16px' },
   textarea: { width: '100%', padding: '12px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.04)', color: '#fff', fontSize: '13px', outline: 'none', resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box', lineHeight: '1.5' },
+  // Tabla entregas
+  table: { width: '100%', borderCollapse: 'collapse' },
+  th: { color: 'rgba(255,255,255,0.4)', fontSize: '11px', fontWeight: '600', textAlign: 'left', padding: '8px 12px', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.06)' },
+  tr: { borderBottom: '1px solid rgba(255,255,255,0.04)' },
+  td: { color: 'rgba(255,255,255,0.8)', fontSize: '13px', padding: '12px' },
+  badge: { padding: '4px 10px', borderRadius: '8px', fontSize: '13px', fontWeight: '600' },
+  // Detalle entrega
+  trabajoBox: { background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', padding: '16px' },
+  textoTrabajo: { color: 'rgba(255,255,255,0.7)', fontSize: '13px', lineHeight: '1.7', whiteSpace: 'pre-wrap', maxHeight: '400px', overflowY: 'auto', padding: '4px' },
   grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' },
   grid3: { display: 'grid', gridTemplateColumns: '1fr 1fr 120px', gap: '16px', marginBottom: '16px' },
   label: { display: 'block', color: 'rgba(255,255,255,0.6)', fontSize: '13px', fontWeight: '500', marginBottom: '8px' },
