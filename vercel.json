@@ -1,4 +1,6 @@
 {
+  "buildCommand": "npm ci --prefer-offline --no-audit && npm run build",
+  "installCommand": "npm ci --prefer-offline --no-audit",
   "rewrites": [
     { "source": "/(.*)", "destination": "/index.html" }
   ]
