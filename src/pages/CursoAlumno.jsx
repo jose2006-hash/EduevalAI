@@ -3,12 +3,45 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   getCurso, getEntregasByAlumnoYCurso, crearEntrega, eliminarEntrega,
-  subirPdfEntrega, actualizarEntregaAlumno, eliminarArchivoEntrega,
+  actualizarEntregaAlumno,
   calcularNotaFinal, getRubricas, getActividadesByCurso,
   getMatriculasByAlumno, eliminarMatricula,
 } from '../firebase/services.js';
 import { evaluarTrabajo } from '../openai/evaluador.js';
 import { useAuth } from '../components/AuthContext.jsx';
+
+// ── PDF text extraction con pdfjs-dist ────────────────────────────────────
+const extractPdfText = async (file) => {
+  try {
+    const pdfjsLib = await import('pdfjs-dist');
+    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    let fullText = '';
+    for (let i = 1; i <= Math.min(pdf.numPages, 20); i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      const pageText = content.items.map(item => item.str).join(' ');
+      fullText += pageText + '\n';
+    }
+    return fullText.substring(0, 8000).trim();
+  } catch {
+    // Fallback a latin1 si pdfjs falla
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const text = ev.target.result
+          .replace(/[^\x20-\x7E\xA0-\xFF\n]/g, ' ')
+          .replace(/\s{3,}/g, '\n')
+          .substring(0, 8000);
+        resolve(text);
+      };
+      reader.readAsText(file, 'latin1');
+    });
+  }
+};
+
+const MAX_ENTREGAS_POR_ACTIVIDAD = 2;
 
 export default function CursoAlumno() {
   const { cursoId } = useParams();
@@ -24,8 +57,8 @@ export default function CursoAlumno() {
   const [showForm, setShowForm] = useState(false);
   const [entregaSeleccionada, setEntregaSeleccionada] = useState(null);
   const [dragging, setDragging] = useState(false);
-  const [confirm, setConfirm] = useState(null); // { tipo: 'entrega'|'desmatricular', id, nombre }
-  const [editEntrega, setEditEntrega] = useState(null); // entrega en edición
+  const [confirm, setConfirm] = useState(null);
+  const [editEntrega, setEditEntrega] = useState(null);
 
   const [form, setForm] = useState({
     tipoEvaluacion: '', actividadId: '', titulo: '', texto: '', rubricaId: '',
@@ -49,12 +82,13 @@ export default function CursoAlumno() {
       getRubricas(cursoId),
       getActividadesByCurso(cursoId),
     ]);
-    setCurso(c);
-    setEntregas(ents);
-    setRubricas(rubs);
-    setActividades(acts);
+    setCurso(c); setEntregas(ents); setRubricas(rubs); setActividades(acts);
     setLoading(false);
   };
+
+  // Cuántas veces subió el alumno una actividad específica
+  const contarEntregasActividad = (actividadId) =>
+    entregas.filter(e => e.actividadId === actividadId).length;
 
   const actividadesFiltradas = form.tipoEvaluacion
     ? actividades.filter(a => a.tipoEvaluacion === form.tipoEvaluacion)
@@ -71,22 +105,11 @@ export default function CursoAlumno() {
     setForm(f => ({ ...f, actividadId: id, titulo: act ? act.titulo : '', rubricaId: act?.rubricaId || f.rubricaId }));
   };
 
-  const leerPDF = (file) => new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const text = ev.target.result
-        .replace(/[^\x20-\x7E\xA0-\xFF\n]/g, ' ')
-        .replace(/\s{3,}/g, '\n').substring(0, 8000);
-      resolve(text);
-    };
-    reader.readAsText(file, 'latin1');
-  });
-
   const procesarArchivo = async (file) => {
     if (!file) return;
     if (file.type !== 'application/pdf') { setError('Solo se aceptan archivos PDF'); return; }
     setLeyendo(true); setError('');
-    const texto = await leerPDF(file);
+    const texto = await extractPdfText(file);
     setArchivo(file); setArchivoTexto(texto); setTabActivo('pdf');
     try {
       if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl);
@@ -105,12 +128,23 @@ export default function CursoAlumno() {
     if (!textoFinal?.trim()) return setError('Sube un PDF o escribe el contenido de tu trabajo');
     if (!form.tipoEvaluacion) return setError('Selecciona el tipo de evaluación');
     if (!form.titulo.trim()) return setError('Ingresa un título para tu trabajo');
+
+    // Verificar fecha límite
     if (actividadSeleccionada?.fechaLimite) {
       const limite = new Date(actividadSeleccionada.fechaLimite);
       if (!Number.isNaN(limite.getTime()) && new Date() > limite) {
-        return setError('La fecha límite de esta actividad ya venció');
+        return setError('⏰ La fecha límite de esta actividad ya venció');
       }
     }
+
+    // Verificar límite de 2 entregas por actividad (solo para nuevas, no ediciones)
+    if (!editEntrega && form.actividadId) {
+      const count = contarEntregasActividad(form.actividadId);
+      if (count >= MAX_ENTREGAS_POR_ACTIVIDAD) {
+        return setError(`Solo puedes subir un máximo de ${MAX_ENTREGAS_POR_ACTIVIDAD} trabajos por actividad`);
+      }
+    }
+
     setError(''); setEnviando(true); setMsg('');
     try {
       const rubrica = rubricas.find(r => r.id === form.rubricaId) || rubricas[0];
@@ -122,58 +156,31 @@ export default function CursoAlumno() {
           curso.silaboTexto || '', enunciadoTexto
         );
       }
-      if (editEntrega) {
-        // Si existía PDF y se reemplaza o se cambia a texto, limpiar storage anterior
-        const cambiarATexto = tabActivo === 'texto';
-        const reemplazaPdf = tabActivo === 'pdf' && !!archivo;
-        if ((cambiarATexto || reemplazaPdf) && editEntrega.archivoPath) {
-          await eliminarArchivoEntrega(editEntrega.archivoPath);
-        }
 
-        const baseUpdate = {
-          tipoEvaluacion: form.tipoEvaluacion,
-          actividadId: form.actividadId || null,
-          actividadTitulo: actividadSeleccionada?.titulo || null,
-          titulo: form.titulo,
-          texto: textoFinal,
-          rubricaId: rubrica?.id || null,
-          rubricaNombre: rubrica?.nombre || null,
-          estado: resultado ? 'evaluado' : 'pendiente',
-          // reset campos de archivo (se vuelven a setear si subimos PDF)
-          ...(tabActivo === 'texto' ? { archivoNombre: null, archivoUrl: null, archivoPath: null, archivoMime: null, archivoSize: null } : {}),
-          ...(resultado || {}),
-        };
-
-        await actualizarEntregaAlumno(editEntrega.id, baseUpdate);
-        if (tabActivo === 'pdf' && archivo) {
-          const pdfData = await subirPdfEntrega({ file: archivo, entregaId: editEntrega.id, alumnoUid: user.uid, cursoId });
-          await actualizarEntregaAlumno(editEntrega.id, pdfData);
-        }
-
-        setMsg('✅ Entrega actualizada');
-        setEditEntrega(null);
-        setShowForm(false); resetForm(); await cargar();
-        return;
-      }
-
-      const nueva = await crearEntrega({
+      const datosEntrega = {
         alumnoUid: user.uid, alumnoNombre: userData.nombre,
         cursoId, cursoNombre: curso.nombre,
         tipoEvaluacion: form.tipoEvaluacion,
         actividadId: form.actividadId || null,
         actividadTitulo: actividadSeleccionada?.titulo || null,
-        titulo: form.titulo, texto: textoFinal,
+        titulo: form.titulo,
+        texto: textoFinal,
         archivoNombre: archivo?.name || null,
-        rubricaId: rubrica?.id || null, rubricaNombre: rubrica?.nombre || null,
+        rubricaId: rubrica?.id || null,
+        rubricaNombre: rubrica?.nombre || null,
         estado: resultado ? 'evaluado' : 'pendiente',
         ...(resultado || {}),
-      });
+      };
 
-      if (tabActivo === 'pdf' && archivo) {
-        const pdfData = await subirPdfEntrega({ file: archivo, entregaId: nueva.id, alumnoUid: user.uid, cursoId });
-        await actualizarEntregaAlumno(nueva.id, pdfData);
+      if (editEntrega) {
+        await actualizarEntregaAlumno(editEntrega.id, datosEntrega);
+        setMsg('✅ Entrega actualizada y re-evaluada');
+        setEditEntrega(null);
+      } else {
+        await crearEntrega(datosEntrega);
+        setMsg('✅ Trabajo enviado y evaluado correctamente');
       }
-      setMsg('✅ Trabajo enviado y evaluado correctamente');
+
       setShowForm(false); resetForm(); await cargar();
     } catch (err) {
       setError('Error al evaluar: ' + err.message);
@@ -188,7 +195,6 @@ export default function CursoAlumno() {
     setPdfPreviewUrl('');
   };
 
-  // ── Eliminar entrega ───────────────────────────────────────────────────────
   const handleEliminarEntrega = (e) => {
     setEntregaSeleccionada(null);
     setConfirm({ tipo: 'entrega', id: e.id, nombre: e.titulo });
@@ -197,9 +203,7 @@ export default function CursoAlumno() {
   const handleEditarEntrega = (e) => {
     setEntregaSeleccionada(null);
     setEditEntrega(e);
-    setShowForm(true);
-    setMsg('');
-    setError('');
+    setShowForm(true); setMsg(''); setError('');
     setForm({
       tipoEvaluacion: e.tipoEvaluacion || '',
       actividadId: e.actividadId || '',
@@ -209,16 +213,13 @@ export default function CursoAlumno() {
     });
     const act = e.actividadId ? actividades.find(a => a.id === e.actividadId) : null;
     setActividadSeleccionada(act || null);
-    setArchivo(null);
-    setArchivoTexto(e.texto || '');
+    setArchivo(null); setArchivoTexto(e.texto || '');
     setTabActivo(e.archivoUrl ? 'pdf' : 'texto');
     setPdfPreviewUrl(e.archivoUrl || '');
   };
 
-  // ── Desmatricularse ────────────────────────────────────────────────────────
-  const handleDesmatricularse = async () => {
+  const handleDesmatricularse = () =>
     setConfirm({ tipo: 'desmatricular', id: null, nombre: curso?.nombre });
-  };
 
   const ejecutarConfirm = async () => {
     if (!confirm) return;
@@ -233,9 +234,7 @@ export default function CursoAlumno() {
         if (mat) await eliminarMatricula(mat.id);
         navigate('/mis-cursos');
       }
-    } catch (err) {
-      setMsg('❌ Error: ' + err.message);
-    }
+    } catch (err) { setMsg('❌ Error: ' + err.message); }
     setConfirm(null);
   };
 
@@ -274,9 +273,7 @@ export default function CursoAlumno() {
               {notaFinal !== null ? `${notaFinal}/20` : '—'}
             </p>
           </div>
-          <button style={s.desmatricularBtn} onClick={handleDesmatricularse}>
-            🚪 Salir del curso
-          </button>
+          <button style={s.desmatricularBtn} onClick={handleDesmatricularse}>🚪 Salir del curso</button>
         </div>
       </header>
 
@@ -287,8 +284,7 @@ export default function CursoAlumno() {
         {curso?.tiposEvaluacion?.map((t, i) => {
           const ents = (entregasPorTipo[t.nombre] || []).filter(e => e.estado === 'evaluado');
           const prom = ents.length
-            ? (ents.reduce((sum, e) => sum + (e.notaFinal || 0), 0) / ents.length).toFixed(1)
-            : null;
+            ? (ents.reduce((sum, e) => sum + (e.notaFinal || 0), 0) / ents.length).toFixed(1) : null;
           const actsDelTipo = actividades.filter(a => a.tipoEvaluacion === t.nombre);
           return (
             <div key={i} style={s.pesoCard}>
@@ -304,33 +300,46 @@ export default function CursoAlumno() {
         })}
       </div>
 
-      {/* Actividades disponibles */}
+      {/* Actividades del docente */}
       {actividades.length > 0 && (
         <div style={s.actividadesSection}>
           <h3 style={s.actividadesTitle}>📋 Actividades del docente</h3>
           <div style={s.actividadesGrid}>
-            {actividades.map((a, i) => (
-              <div key={i} style={s.actividadCard}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px' }}>
-                  <span style={s.actTitulo}>{a.titulo}</span>
-                  <span style={s.actTipoBadge}>{a.tipoEvaluacion}</span>
-                </div>
-                {a.descripcion && <p style={s.actDesc}>{a.descripcion}</p>}
-                {a.enunciadoNombre && <p style={s.actArchivo}>📄 Enunciado: {a.enunciadoNombre}</p>}
-                {a.fechaLimite && (
-                  <p style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px', margin: '2px 0 0' }}>
-                    📅 Límite: {new Date(a.fechaLimite).toLocaleString('es-PE')}
+            {actividades.map((a, i) => {
+              const count = contarEntregasActividad(a.id);
+              const vencida = a.fechaLimite && new Date(a.fechaLimite) < new Date();
+              const agotada = count >= MAX_ENTREGAS_POR_ACTIVIDAD;
+              return (
+                <div key={i} style={s.actividadCard}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px' }}>
+                    <span style={s.actTitulo}>{a.titulo}</span>
+                    <span style={s.actTipoBadge}>{a.tipoEvaluacion}</span>
+                  </div>
+                  {a.descripcion && <p style={s.actDesc}>{a.descripcion}</p>}
+                  {a.enunciadoNombre && <p style={s.actArchivo}>📄 Enunciado: {a.enunciadoNombre}</p>}
+                  {a.fechaLimite && (
+                    <p style={{ color: vencida ? '#ef4444' : '#f59e0b', fontSize: '12px', margin: '2px 0 0' }}>
+                      📅 Límite: {new Date(a.fechaLimite).toLocaleString('es-PE')}
+                      {vencida && ' — VENCIDA'}
+                    </p>
+                  )}
+                  <p style={{ color: agotada ? '#ef4444' : 'rgba(255,255,255,0.4)', fontSize: '11px', margin: '4px 0 0' }}>
+                    {count}/{MAX_ENTREGAS_POR_ACTIVIDAD} entregas usadas
                   </p>
-                )}
-                <button style={s.responderBtn} onClick={() => {
-                  setShowForm(true);
-                  setForm(f => ({ ...f, tipoEvaluacion: a.tipoEvaluacion, actividadId: a.id, titulo: a.titulo, rubricaId: a.rubricaId || '' }));
-                  setActividadSeleccionada(a);
-                }}>
-                  📤 Subir mi trabajo
-                </button>
-              </div>
-            ))}
+                  <button
+                    style={{ ...s.responderBtn, opacity: (vencida || agotada) ? 0.4 : 1, cursor: (vencida || agotada) ? 'not-allowed' : 'pointer' }}
+                    disabled={vencida || agotada}
+                    onClick={() => {
+                      if (vencida || agotada) return;
+                      setShowForm(true);
+                      setForm(f => ({ ...f, tipoEvaluacion: a.tipoEvaluacion, actividadId: a.id, titulo: a.titulo, rubricaId: a.rubricaId || '' }));
+                      setActividadSeleccionada(a);
+                    }}>
+                    {agotada ? '✓ Límite alcanzado' : vencida ? '⏰ Vencida' : '📤 Subir mi trabajo'}
+                  </button>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -365,15 +374,16 @@ export default function CursoAlumno() {
                         {e.estado === 'evaluado' ? `${e.notaFinal}/20` : '⏳ Pendiente'}
                       </span>
                     </div>
+                    {e.notaEditadaManualmente && (
+                      <span style={{ color: '#60a5fa', fontSize: '10px' }}>✏️ Nota ajustada por docente</span>
+                    )}
                     {e.actividadTitulo && <p style={s.actividadTag}>📋 {e.actividadTitulo}</p>}
                     {e.archivoNombre && <p style={s.archivoTag}>📄 {e.archivoNombre}</p>}
                     {e.nivelGlobal && <p style={s.entregaNivel}>{e.nivelGlobal}</p>}
                     <p style={s.entregaFecha}>{e.creadoEn?.toDate?.()?.toLocaleDateString('es-PE') || '—'}</p>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }}>
-                      {e.estado === 'evaluado' && <p style={{ ...s.verDetalle, margin: 0 }}>Ver retroalimentación →</p>}
-                      <button style={s.deleteEntregaBtn}
-                        onClick={ev => { ev.stopPropagation(); handleEliminarEntrega(e); }}
-                        title="Eliminar entrega">🗑</button>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }} onClick={ev => ev.stopPropagation()}>
+                      <button style={{ ...s.editBtn }} onClick={() => handleEditarEntrega(e)}>✏️ Editar</button>
+                      <button style={s.deleteEntregaBtn} onClick={() => handleEliminarEntrega(e)}>🗑</button>
                     </div>
                   </div>
                 ))}
@@ -383,7 +393,7 @@ export default function CursoAlumno() {
         );
       })}
 
-      {/* ── Modal confirmación ── */}
+      {/* Modal confirmación */}
       {confirm && (
         <div style={s.overlay}>
           <div style={{ ...s.modal, maxWidth: '420px', textAlign: 'center' }}>
@@ -393,8 +403,8 @@ export default function CursoAlumno() {
             </h3>
             <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '14px', margin: '0 0 24px', lineHeight: '1.5' }}>
               {confirm.tipo === 'entrega'
-                ? <>¿Eliminar la entrega <strong style={{ color: '#fff' }}>"{confirm.nombre}"</strong>? No se puede deshacer.</>
-                : <>¿Deseas desmatricularte de <strong style={{ color: '#fff' }}>"{confirm.nombre}"</strong>? Perderás el acceso al curso.</>
+                ? <>¿Eliminar <strong style={{ color: '#fff' }}>"{confirm.nombre}"</strong>? No se puede deshacer.</>
+                : <>¿Desmatricularte de <strong style={{ color: '#fff' }}>"{confirm.nombre}"</strong>?</>
               }
             </p>
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
@@ -407,7 +417,7 @@ export default function CursoAlumno() {
         </div>
       )}
 
-      {/* Modal subir trabajo */}
+      {/* Modal subir/editar trabajo */}
       {showForm && (
         <div style={s.overlay}>
           <div style={s.modal}>
@@ -415,16 +425,12 @@ export default function CursoAlumno() {
               <h2 style={s.modalTitle}>{editEntrega ? '✏️ Editar entrega' : '📝 Subir Trabajo'}</h2>
               <button style={s.closeBtn} onClick={() => { setShowForm(false); setEditEntrega(null); resetForm(); }}>✕</button>
             </div>
+
             {actividadSeleccionada && (
               <div style={s.actividadInfoBox}>
                 <p style={s.actividadInfoLabel}>📋 Actividad seleccionada</p>
                 <p style={s.actividadInfoTitulo}>{actividadSeleccionada.titulo}</p>
                 {actividadSeleccionada.descripcion && <p style={s.actividadInfoDesc}>{actividadSeleccionada.descripcion}</p>}
-                {actividadSeleccionada.enunciadoNombre && (
-                  <p style={{ color: '#22c55e', fontSize: '12px', margin: '4px 0 0' }}>
-                    📄 Enunciado cargado: {actividadSeleccionada.enunciadoNombre}
-                  </p>
-                )}
                 {actividadSeleccionada.fechaLimite && (
                   <p style={{ color: '#f59e0b', fontSize: '12px', margin: '6px 0 0' }}>
                     📅 Fecha límite: {new Date(actividadSeleccionada.fechaLimite).toLocaleString('es-PE')}
@@ -432,6 +438,7 @@ export default function CursoAlumno() {
                 )}
               </div>
             )}
+
             <div style={s.grid2}>
               <div>
                 <label style={s.label}>Tipo de evaluación *</label>
@@ -447,41 +454,48 @@ export default function CursoAlumno() {
                 <select style={s.select} value={form.actividadId}
                   onChange={e => handleActividadChange(e.target.value)} disabled={!form.tipoEvaluacion}>
                   <option value="">Sin actividad específica</option>
-                  {actividadesFiltradas.map(a => <option key={a.id} value={a.id}>{a.titulo}</option>)}
+                  {actividadesFiltradas.map(a => (
+                    <option key={a.id} value={a.id}>
+                      {a.titulo} ({contarEntregasActividad(a.id)}/{MAX_ENTREGAS_POR_ACTIVIDAD})
+                    </option>
+                  ))}
                 </select>
               </div>
             </div>
+
             <div style={s.grid2}>
               <div>
                 <label style={s.label}>Título del trabajo *</label>
-                <input style={s.input} placeholder="Ej: Tarea 1 - Introducción"
+                <input style={s.input} placeholder="Ej: Tarea 1"
                   value={form.titulo} onChange={e => setForm(f => ({ ...f, titulo: e.target.value }))} />
               </div>
               <div>
                 <label style={s.label}>Rúbrica de evaluación</label>
                 <select style={s.select} value={form.rubricaId}
                   onChange={e => setForm(f => ({ ...f, rubricaId: e.target.value }))}>
-                  <option value="">{rubricas.length === 0 ? 'Sin rúbricas asignadas' : 'Seleccionar rúbrica...'}</option>
+                  <option value="">{rubricas.length === 0 ? 'Sin rúbricas asignadas' : 'Seleccionar...'}</option>
                   {rubricas.map(r => <option key={r.id} value={r.id}>{r.nombre}</option>)}
                 </select>
               </div>
             </div>
+
             <div style={s.tabs}>
               <button style={{ ...s.tab, ...(tabActivo === 'pdf' ? s.tabActivo : {}) }} onClick={() => setTabActivo('pdf')}>📄 Subir PDF</button>
               <button style={{ ...s.tab, ...(tabActivo === 'texto' ? s.tabActivo : {}) }} onClick={() => setTabActivo('texto')}>✏️ Escribir texto</button>
             </div>
+
             {tabActivo === 'pdf' && (
               <div ref={dropRef}
                 style={{ ...s.dropZone, ...(dragging ? s.dropZoneActive : {}), ...(archivo ? s.dropZoneDone : {}) }}
                 onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
                 {leyendo ? (
-                  <div style={s.dropContent}><div style={s.spinner} /><p style={s.dropText}>Leyendo archivo...</p></div>
+                  <div style={s.dropContent}><div style={s.spinner} /><p style={s.dropText}>Extrayendo texto del PDF...</p></div>
                 ) : archivo ? (
                   <div style={s.dropContent}>
                     <span style={{ fontSize: '40px' }}>✅</span>
                     <p style={{ ...s.dropText, color: '#22c55e' }}>{archivo.name}</p>
-                    <p style={s.dropHint}>Archivo listo para evaluar</p>
-                    <button style={s.clearBtn} onClick={() => { setArchivo(null); setArchivoTexto(''); }}>Quitar archivo</button>
+                    <p style={s.dropHint}>PDF listo · texto extraído correctamente</p>
+                    <button style={s.clearBtn} onClick={() => { setArchivo(null); setArchivoTexto(''); setPdfPreviewUrl(''); }}>Quitar archivo</button>
                   </div>
                 ) : (
                   <div style={s.dropContent}>
@@ -496,34 +510,32 @@ export default function CursoAlumno() {
                 )}
               </div>
             )}
-            {tabActivo === 'pdf' && (pdfPreviewUrl || archivo) && (
+
+            {tabActivo === 'pdf' && pdfPreviewUrl && (
               <div style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', overflow: 'hidden', marginBottom: '16px' }}>
-                <div style={{ padding: '10px 12px', background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.6)', fontSize: '12px' }}>
-                  Vista previa del PDF
-                </div>
-                <iframe
-                  title="Vista previa PDF"
-                  src={pdfPreviewUrl}
-                  style={{ width: '100%', height: '360px', border: 'none', background: '#0f0c29' }}
-                />
+                <p style={{ padding: '8px 12px', background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.5)', fontSize: '12px', margin: 0 }}>Vista previa del PDF</p>
+                <iframe title="Vista previa" src={pdfPreviewUrl} style={{ width: '100%', height: '320px', border: 'none', background: '#0f0c29' }} />
               </div>
             )}
+
             {tabActivo === 'texto' && (
               <textarea style={s.textarea}
                 placeholder="Escribe o pega el contenido de tu trabajo aquí..."
                 value={form.texto} onChange={e => setForm(f => ({ ...f, texto: e.target.value }))} rows={12} />
             )}
+
             {error && <p style={s.error}>{error}</p>}
             {enviando && (
               <div style={s.evaluandoMsg}>
                 <div style={s.spinner} />
-                Evaluando con IA{actividadSeleccionada?.enunciadoTexto ? ' (usando enunciado del docente)' : ''}...
+                Evaluando con IA{actividadSeleccionada?.enunciadoTexto ? ' (con enunciado del docente)' : ''}...
               </div>
             )}
+
             <div style={{ display: 'flex', gap: '12px', marginTop: '20px' }}>
               <button style={s.secondaryBtn} onClick={() => { setShowForm(false); setEditEntrega(null); resetForm(); }}>Cancelar</button>
               <button style={s.primaryBtn} onClick={handleEnviar} disabled={enviando}>
-                {enviando ? 'Evaluando...' : (editEntrega ? '💾 Guardar cambios' : '🚀 Enviar y evaluar con IA')}
+                {enviando ? 'Evaluando...' : editEntrega ? '💾 Guardar cambios' : '🚀 Enviar y evaluar con IA'}
               </button>
             </div>
           </div>
@@ -543,30 +555,17 @@ export default function CursoAlumno() {
                 </p>
               </div>
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <button style={{ ...s.secondaryBtn, padding: '6px 10px', fontSize: '13px' }}
+                <button style={{ ...s.secondaryBtn, padding: '6px 12px', fontSize: '12px' }}
                   onClick={() => handleEditarEntrega(entregaSeleccionada)}>✏️ Editar</button>
-                <button style={s.deleteEntregaBtn} title="Eliminar esta entrega"
-                  onClick={() => handleEliminarEntrega(entregaSeleccionada)}>🗑</button>
+                <button style={s.deleteEntregaBtn} onClick={() => handleEliminarEntrega(entregaSeleccionada)}>🗑</button>
                 <button style={s.closeBtn} onClick={() => setEntregaSeleccionada(null)}>✕</button>
               </div>
             </div>
 
-            {entregaSeleccionada.archivoUrl && (
-              <div style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', overflow: 'hidden', marginBottom: '18px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', background: 'rgba(255,255,255,0.04)' }}>
-                  <span style={{ color: 'rgba(255,255,255,0.65)', fontSize: '12px' }}>
-                    📄 {entregaSeleccionada.archivoNombre || 'PDF'}
-                  </span>
-                  <a href={entregaSeleccionada.archivoUrl} target="_blank" rel="noreferrer"
-                    style={{ color: '#a78bfa', fontSize: '12px', fontWeight: '600', textDecoration: 'none' }}>
-                    Abrir en nueva pestaña →
-                  </a>
-                </div>
-                <iframe
-                  title="PDF entrega"
-                  src={entregaSeleccionada.archivoUrl}
-                  style={{ width: '100%', height: '420px', border: 'none', background: '#0f0c29' }}
-                />
+            {entregaSeleccionada.notaEditadaManualmente && (
+              <div style={{ background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.3)', borderRadius: '10px', padding: '10px 14px', marginBottom: '16px', fontSize: '13px', color: '#93c5fd' }}>
+                ✏️ Nota ajustada manualmente por el docente
+                {entregaSeleccionada.comentarioDocente && ` — "${entregaSeleccionada.comentarioDocente}"`}
               </div>
             )}
 
@@ -637,6 +636,8 @@ export default function CursoAlumno() {
           </div>
         </div>
       )}
+
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }
@@ -684,7 +685,7 @@ const s = {
   archivoTag: { color: 'rgba(255,255,255,0.35)', fontSize: '11px', margin: '0 0 4px' },
   entregaNivel: { color: 'rgba(255,255,255,0.45)', fontSize: '12px', margin: '0 0 4px' },
   entregaFecha: { color: 'rgba(255,255,255,0.3)', fontSize: '11px', margin: 0 },
-  verDetalle: { color: '#a78bfa', fontSize: '12px', margin: '8px 0 0', fontWeight: '500' },
+  editBtn: { background: 'rgba(102,126,234,0.15)', border: '1px solid rgba(102,126,234,0.3)', color: '#a78bfa', borderRadius: '8px', cursor: 'pointer', padding: '5px 10px', fontSize: '12px' },
   deleteEntregaBtn: { background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.2)', color: '#ef4444', borderRadius: '8px', cursor: 'pointer', padding: '4px 8px', fontSize: '13px', flexShrink: 0 },
   overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 1000, overflowY: 'auto', padding: '32px' },
   modal: { background: '#1a1535', borderRadius: '20px', padding: '32px', width: '100%', maxWidth: '680px', border: '1px solid rgba(255,255,255,0.1)' },

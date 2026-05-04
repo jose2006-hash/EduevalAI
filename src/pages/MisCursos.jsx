@@ -3,7 +3,8 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   getMatriculasByAlumno, getCurso,
-  getEntregasByAlumnoYCurso, calcularNotaFinal, logoutUser
+  getEntregasByAlumnoYCurso, calcularNotaFinal,
+  logoutUser, eliminarCuentaUsuario,
 } from '../firebase/services.js';
 import { useAuth } from '../components/AuthContext.jsx';
 
@@ -13,6 +14,10 @@ export default function MisCursos() {
   const [cursos, setCursos] = useState([]);
   const [pendientes, setPendientes] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [showMenu, setShowMenu] = useState(false);
+  const [confirmEliminar, setConfirmEliminar] = useState(false);
+  const [eliminando, setEliminando] = useState(false);
+  const [msgError, setMsgError] = useState('');
 
   useEffect(() => { if (user) cargar(); }, [user]);
 
@@ -43,7 +48,28 @@ export default function MisCursos() {
     setLoading(false);
   };
 
-  const handleLogout = async () => { await logoutUser(); navigate('/login'); };
+  const handleLogout = async () => {
+    await logoutUser();
+    navigate('/login');
+  };
+
+  const handleEliminarCuenta = async () => {
+    setEliminando(true);
+    setMsgError('');
+    try {
+      await eliminarCuentaUsuario(user.uid);
+      navigate('/login');
+    } catch (err) {
+      // Firebase requiere re-autenticación reciente para borrar cuenta
+      if (err.code === 'auth/requires-recent-login') {
+        setMsgError('Por seguridad, cierra sesión y vuelve a ingresar antes de eliminar tu cuenta.');
+      } else {
+        setMsgError('Error: ' + err.message);
+      }
+      setEliminando(false);
+      setConfirmEliminar(false);
+    }
+  };
 
   const nivelColor = (nota) => {
     if (nota === null || nota === undefined) return '#667eea';
@@ -66,11 +92,34 @@ export default function MisCursos() {
           <h1 style={s.title}>👨‍🎓 {userData?.nombre}</h1>
           <p style={s.subtitle}>Portal del Estudiante</p>
         </div>
-        <div style={{ display: 'flex', gap: '10px' }}>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', position: 'relative' }}>
           <button style={s.joinBtn} onClick={() => navigate('/unirse')}>+ Unirse a curso</button>
-          <button style={s.logoutBtn} onClick={handleLogout}>Salir</button>
+
+          {/* Menú usuario */}
+          <div style={{ position: 'relative' }}>
+            <button style={s.menuBtn} onClick={() => setShowMenu(m => !m)}>
+              👤 ▾
+            </button>
+            {showMenu && (
+              <div style={s.dropdown}>
+                <button style={s.dropItem} onClick={() => { setShowMenu(false); handleLogout(); }}>
+                  🚪 Cerrar sesión
+                </button>
+                <button style={{ ...s.dropItem, color: '#ef4444' }}
+                  onClick={() => { setShowMenu(false); setConfirmEliminar(true); }}>
+                  🗑 Eliminar mi cuenta
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
+
+      {msgError && (
+        <div style={{ color: '#ef4444', background: 'rgba(239,68,68,0.1)', padding: '12px 16px', borderRadius: '10px', marginBottom: '16px', fontSize: '14px' }}>
+          {msgError}
+        </div>
+      )}
 
       {/* Solicitudes pendientes */}
       {pendientes.length > 0 && (
@@ -148,6 +197,29 @@ export default function MisCursos() {
           })}
         </div>
       )}
+
+      {/* Modal confirmar eliminar cuenta */}
+      {confirmEliminar && (
+        <div style={s.overlay}>
+          <div style={{ ...s.modal, textAlign: 'center' }}>
+            <p style={{ fontSize: '44px', margin: '0 0 12px' }}>⚠️</p>
+            <h3 style={{ color: '#fff', fontSize: '20px', margin: '0 0 8px' }}>Eliminar cuenta</h3>
+            <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '14px', margin: '0 0 8px', lineHeight: '1.6' }}>
+              ¿Estás seguro? Se eliminará tu cuenta permanentemente.
+              <br />Tus entregas y datos <strong style={{ color: '#ef4444' }}>no se podrán recuperar</strong>.
+            </p>
+            <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px', margin: '0 0 24px' }}>
+              Después podrás registrarte con un nuevo correo.
+            </p>
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+              <button style={s.cancelBtn} onClick={() => setConfirmEliminar(false)}>Cancelar</button>
+              <button style={s.dangerBtn} onClick={handleEliminarCuenta} disabled={eliminando}>
+                {eliminando ? 'Eliminando...' : 'Sí, eliminar mi cuenta'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -158,7 +230,9 @@ const s = {
   title: { fontSize: '26px', fontWeight: '700', margin: '0 0 4px' },
   subtitle: { color: 'rgba(255,255,255,0.4)', fontSize: '14px', margin: 0 },
   joinBtn: { padding: '10px 20px', borderRadius: '10px', background: 'linear-gradient(135deg, #667eea, #764ba2)', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: '600', fontSize: '14px' },
-  logoutBtn: { padding: '10px 20px', borderRadius: '10px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.6)', cursor: 'pointer', fontSize: '14px' },
+  menuBtn: { padding: '10px 16px', borderRadius: '10px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.7)', cursor: 'pointer', fontSize: '14px' },
+  dropdown: { position: 'absolute', top: '110%', right: 0, background: '#1a1535', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', padding: '6px', zIndex: 100, minWidth: '200px', boxShadow: '0 8px 24px rgba(0,0,0,0.4)' },
+  dropItem: { width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', color: 'rgba(255,255,255,0.7)', cursor: 'pointer', fontSize: '14px', textAlign: 'left', borderRadius: '8px', display: 'block' },
   pendientesBox: { background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: '14px', padding: '16px 20px', marginBottom: '24px' },
   pendientesTitle: { color: '#f59e0b', fontSize: '14px', fontWeight: '600', margin: '0 0 12px' },
   pendienteRow: { display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px', flexWrap: 'wrap' },
@@ -186,4 +260,8 @@ const s = {
   notaValue: { fontSize: '24px', fontWeight: '800', margin: 0 },
   entregasLabel: { color: 'rgba(255,255,255,0.4)', fontSize: '12px', margin: 0 },
   verCursoBtn: { width: '100%', padding: '10px', borderRadius: '10px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.7)', cursor: 'pointer', fontSize: '14px', fontWeight: '500', marginTop: '4px' },
+  overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 },
+  modal: { background: '#1a1535', borderRadius: '20px', padding: '36px', width: '100%', maxWidth: '440px', border: '1px solid rgba(255,255,255,0.1)' },
+  cancelBtn: { padding: '12px 24px', borderRadius: '12px', background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.7)', border: '1px solid rgba(255,255,255,0.12)', cursor: 'pointer', fontSize: '14px' },
+  dangerBtn: { padding: '12px 24px', borderRadius: '12px', background: 'rgba(239,68,68,0.2)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.4)', cursor: 'pointer', fontWeight: '600', fontSize: '14px' },
 };

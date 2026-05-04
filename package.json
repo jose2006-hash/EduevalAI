@@ -9,13 +9,14 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "chart.js": "^4.4.1",
     "firebase": "^10.7.0",
     "openai": "^4.28.0",
-    "chart.js": "^4.4.1",
+    "pdfjs-dist": "^5.7.284",
     "react": "^18.2.0",
+    "react-chartjs-2": "^5.2.0",
     "react-dom": "^18.2.0",
-    "react-router-dom": "^6.21.3",
-    "react-chartjs-2": "^5.2.0"
+    "react-router-dom": "^6.21.3"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.2.1",
