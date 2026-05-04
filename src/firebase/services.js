@@ -34,7 +34,6 @@ export const getUserData = async (uid) => {
   return snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
 };
 
-// Elimina cuenta completa: Firestore doc + Firebase Auth
 export const eliminarCuentaUsuario = async (uid) => {
   const q = query(collection(db, 'usuarios'), where('uid', '==', uid));
   const snap = await getDocs(q);
@@ -225,6 +224,28 @@ export const getEntregasByCurso = async (cursoId) => {
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 };
 
+// ✅ Solo las entregas de los cursos que pertenecen al docente
+export const getEntregasByDocente = async (docenteUid) => {
+  // 1. Obtener los cursos del docente
+  const cursosSnap = await getDocs(
+    query(collection(db, 'cursos'), where('docenteUid', '==', docenteUid))
+  );
+  const cursoIds = cursosSnap.docs.map(d => d.id);
+  if (cursoIds.length === 0) return [];
+
+  // 2. Traer entregas de cada curso en paralelo (Firestore no tiene IN con orderBy cross-collection)
+  const promises = cursoIds.map(cid =>
+    getDocs(query(collection(db, 'entregas'), where('cursoId', '==', cid)))
+  );
+  const snaps = await Promise.all(promises);
+  const todas = snaps.flatMap(s => s.docs.map(d => ({ id: d.id, ...d.data() })));
+
+  // 3. Ordenar por fecha descendente
+  todas.sort((a, b) => (b.creadoEn?.seconds || 0) - (a.creadoEn?.seconds || 0));
+  return todas;
+};
+
+// Legado — solo para compatibilidad, NO usar en dashboard (muestra todo)
 export const getTodasEntregas = async () => {
   const snap = await getDocs(
     query(collection(db, 'entregas'), orderBy('creadoEn', 'desc'))
@@ -238,7 +259,6 @@ export const actualizarEntrega = (id, datos) =>
 export const actualizarEntregaAlumno = (id, datos) =>
   updateDoc(doc(db, 'entregas', id), { ...datos, modificadoEn: serverTimestamp() });
 
-// Docente edita la nota manualmente
 export const editarNotaEntrega = (id, notaFinal, comentarioDocente = '') =>
   updateDoc(doc(db, 'entregas', id), {
     notaFinal,
@@ -251,11 +271,10 @@ export const editarNotaEntrega = (id, notaFinal, comentarioDocente = '') =>
       : 'Insuficiente',
   });
 
-export const subirPdfEntrega = async ({ file, entregaId, alumnoUid, cursoId }) => {
-  return { archivoNombre: file?.name || null, archivoUrl: null };
-};
+export const subirPdfEntrega = async ({ file }) =>
+  ({ archivoNombre: file?.name || null, archivoUrl: null });
 
-export const eliminarArchivoEntrega = async (archivoPath) => { return; };
+export const eliminarArchivoEntrega = async () => {};
 
 export const eliminarEntrega = (id) => deleteDoc(doc(db, 'entregas', id));
 

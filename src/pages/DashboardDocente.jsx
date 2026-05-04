@@ -7,9 +7,11 @@ import {
   ArcElement, PointElement, LineElement, Title, Tooltip, Legend
 } from 'chart.js';
 import {
-  getTodasEntregas, getTodasEvaluaciones,
-  getCursos, getAllAlumnos, logoutUser,
-  eliminarEntrega, eliminarEvaluacion, actualizarEntrega,
+  getEntregasByDocente,
+  getCursosByDocente,
+  getAllAlumnos,
+  logoutUser,
+  eliminarEntrega,
 } from '../firebase/services.js';
 import { useAuth } from '../components/AuthContext.jsx';
 
@@ -23,16 +25,16 @@ export default function DashboardDocente() {
   const [alumnos, setAlumnos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard');
-  const [confirm, setConfirm] = useState(null); // { id, nombre }
-  const [detalle, setDetalle] = useState(null);
-  const [notaManual, setNotaManual] = useState('');
-  const [guardandoManual, setGuardandoManual] = useState(false);
+  const [confirm, setConfirm] = useState(null);
 
-  useEffect(() => { cargar(); }, []);
+  useEffect(() => { if (userData?.uid) cargar(); }, [userData]);
 
   const cargar = async () => {
+    // ✅ Filtra por docenteUid — cada docente solo ve sus propios cursos y entregas
     const [ents, crs, alms] = await Promise.all([
-      getTodasEntregas(), getCursos(), getAllAlumnos()
+      getEntregasByDocente(userData.uid),
+      getCursosByDocente(userData.uid),
+      getAllAlumnos(),
     ]);
     setEntregas(ents);
     setCursos(crs);
@@ -40,8 +42,8 @@ export default function DashboardDocente() {
     setLoading(false);
   };
 
-  // Stats basadas en entregas evaluadas
   const evaluadas = entregas.filter(e => e.estado === 'evaluado');
+
   const stats = {
     total: entregas.length,
     promedio: evaluadas.length
@@ -67,15 +69,21 @@ export default function DashboardDocente() {
     }]
   };
 
+  // Alumnos únicos de los cursos del docente
+  const alumnosDelDocente = alumnos.filter(a =>
+    entregas.some(e => e.alumnoUid === a.uid)
+  );
+
   const barData = {
-    labels: alumnos.slice(0, 10).map(a => a.nombre?.split(' ')[0] || 'Alumno'),
+    labels: alumnosDelDocente.slice(0, 10).map(a => a.nombre?.split(' ')[0] || 'Alumno'),
     datasets: [{
       label: 'Nota Final',
-      data: alumnos.slice(0, 10).map(a => {
-        const ev = evaluadas.find(e => e.alumnoUid === a.uid);
-        return ev?.notaFinal || 0;
+      data: alumnosDelDocente.slice(0, 10).map(a => {
+        const evs = evaluadas.filter(e => e.alumnoUid === a.uid);
+        if (!evs.length) return 0;
+        return (evs.reduce((s, e) => s + (e.notaFinal || 0), 0) / evs.length).toFixed(1) * 1;
       }),
-      backgroundColor: 'rgba(102, 126, 234, 0.8)',
+      backgroundColor: 'rgba(102,126,234,0.8)',
       borderRadius: 8,
     }]
   };
@@ -94,34 +102,6 @@ export default function DashboardDocente() {
     await eliminarEntrega(confirm.id);
     setEntregas(prev => prev.filter(e => e.id !== confirm.id));
     setConfirm(null);
-  };
-
-  const nivelPorNota = (nota) => {
-    if (nota === null || nota === undefined) return '—';
-    if (nota >= 18) return 'Excelente';
-    if (nota >= 14) return 'Bueno';
-    if (nota >= 11) return 'Regular';
-    return 'Insuficiente';
-  };
-
-  const guardarNotaManual = async () => {
-    if (!detalle) return;
-    const n = Number(String(notaManual).replace(',', '.'));
-    if (Number.isNaN(n) || n < 0 || n > 20) return;
-    setGuardandoManual(true);
-    try {
-      const nivel = nivelPorNota(n);
-      await actualizarEntrega(detalle.id, {
-        estado: 'evaluado',
-        notaFinal: Math.round(n * 10) / 10,
-        notaManual: Math.round(n * 10) / 10,
-        nivelGlobal: nivel,
-      });
-      setEntregas(prev => prev.map(e => e.id === detalle.id ? { ...e, estado: 'evaluado', notaFinal: Math.round(n * 10) / 10, notaManual: Math.round(n * 10) / 10, nivelGlobal: nivel } : e));
-      setDetalle(d => d ? ({ ...d, estado: 'evaluado', notaFinal: Math.round(n * 10) / 10, notaManual: Math.round(n * 10) / 10, nivelGlobal: nivel }) : d);
-    } finally {
-      setGuardandoManual(false);
-    }
   };
 
   const handleLogout = async () => { await logoutUser(); navigate('/login'); };
@@ -163,12 +143,13 @@ export default function DashboardDocente() {
           </button>
         </header>
 
+        {/* Stats */}
         <div style={styles.statsGrid}>
           {[
-            { label: 'Total Entregas',    value: stats.total,            icon: '📝', color: '#667eea' },
-            { label: 'Promedio Clase',    value: `${stats.promedio}/20`, icon: '⭐', color: '#22c55e' },
-            { label: 'Aprobados',         value: stats.aprobados,        icon: '✅', color: '#3b82f6' },
-            { label: 'Desaprobados',      value: stats.desaprobados,     icon: '❌', color: '#ef4444' },
+            { label: 'Total Entregas',  value: stats.total,            icon: '📝', color: '#667eea' },
+            { label: 'Promedio Clase',  value: `${stats.promedio}/20`, icon: '⭐', color: '#22c55e' },
+            { label: 'Aprobados',       value: stats.aprobados,        icon: '✅', color: '#3b82f6' },
+            { label: 'Desaprobados',    value: stats.desaprobados,     icon: '❌', color: '#ef4444' },
           ].map((s, i) => (
             <div key={i} style={{ ...styles.statCard, borderTop: `3px solid ${s.color}` }}>
               <div style={styles.statIcon}>{s.icon}</div>
@@ -178,6 +159,27 @@ export default function DashboardDocente() {
           ))}
         </div>
 
+        {/* Cursos del docente */}
+        {cursos.length > 0 && (
+          <div style={styles.cursosRow}>
+            {cursos.map((c, i) => {
+              const entsDelCurso = evaluadas.filter(e => e.cursoId === c.id);
+              const prom = entsDelCurso.length
+                ? (entsDelCurso.reduce((s, e) => s + (e.notaFinal || 0), 0) / entsDelCurso.length).toFixed(1)
+                : '—';
+              return (
+                <div key={i} style={styles.cursoMini} onClick={() => navigate('/cursos')}>
+                  <p style={styles.cursoMiniNombre}>{c.nombre}</p>
+                  <p style={styles.cursoMiniSub}>Sección {c.seccion} · {c.ciclo}</p>
+                  <p style={styles.cursoMiniNota}>{prom !== '—' ? `${prom}/20` : '—'}</p>
+                  <p style={styles.cursoMiniCount}>{entsDelCurso.length} evaluado{entsDelCurso.length !== 1 ? 's' : ''}</p>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Charts */}
         <div style={styles.chartsGrid}>
           <div style={styles.chartCard}>
             <h3 style={styles.chartTitle}>Distribución de Notas</h3>
@@ -185,11 +187,14 @@ export default function DashboardDocente() {
           </div>
           <div style={styles.chartCard}>
             <h3 style={styles.chartTitle}>Notas por Alumno</h3>
-            <Bar data={barData} options={chartOpts} />
+            {alumnosDelDocente.length > 0
+              ? <Bar data={barData} options={chartOpts} />
+              : <p style={{ color: 'rgba(255,255,255,0.3)', textAlign: 'center', paddingTop: '40px' }}>Sin datos aún</p>
+            }
           </div>
         </div>
 
-        {/* Tabla entregas recientes con botón eliminar */}
+        {/* Tabla entregas */}
         <div style={styles.tableCard}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
             <h3 style={{ ...styles.chartTitle, margin: 0 }}>Evaluaciones Recientes</h3>
@@ -207,8 +212,8 @@ export default function DashboardDocente() {
                 </tr>
               </thead>
               <tbody>
-                {entregas.slice(0, 12).map((ev, i) => (
-                  <tr key={i} style={{ ...styles.tr, cursor: 'pointer' }} onClick={() => { setDetalle(ev); setNotaManual(ev?.notaManual ?? ''); }}>
+                {entregas.slice(0, 15).map((ev, i) => (
+                  <tr key={i} style={styles.tr}>
                     <td style={styles.td}>{ev.alumnoNombre || '—'}</td>
                     <td style={styles.td}>
                       <span style={{ maxWidth: '140px', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -238,7 +243,7 @@ export default function DashboardDocente() {
                     </td>
                     <td style={styles.td}>
                       <button style={styles.deleteBtn} title="Eliminar entrega"
-                        onClick={(e) => { e.stopPropagation(); setConfirm({ id: ev.id, nombre: ev.titulo || ev.alumnoNombre }); }}>
+                        onClick={() => setConfirm({ id: ev.id, nombre: ev.titulo || ev.alumnoNombre })}>
                         🗑
                       </button>
                     </td>
@@ -248,7 +253,7 @@ export default function DashboardDocente() {
             </table>
             {entregas.length === 0 && (
               <p style={{ color: 'rgba(255,255,255,0.4)', textAlign: 'center', padding: '40px' }}>
-                Aún no hay entregas registradas
+                Aún no hay entregas en tus cursos
               </p>
             )}
           </div>
@@ -267,88 +272,6 @@ export default function DashboardDocente() {
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
               <button style={styles.cancelBtn} onClick={() => setConfirm(null)}>Cancelar</button>
               <button style={styles.dangerBtn} onClick={handleEliminar}>Sí, eliminar</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Modal detalle entrega + nota manual */}
-      {detalle && (
-        <div style={styles.overlay}>
-          <div style={{ ...styles.confirmModal, maxWidth: '760px', textAlign: 'left', padding: '28px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', marginBottom: '14px' }}>
-              <div>
-                <h3 style={{ color: '#fff', fontSize: '18px', margin: 0 }}>{detalle.titulo || 'Entrega'}</h3>
-                <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '13px', margin: '6px 0 0' }}>
-                  {detalle.alumnoNombre || '—'} · {detalle.cursoNombre || '—'} · {detalle.tipoEvaluacion || '—'}
-                </p>
-              </div>
-              <button onClick={() => setDetalle(null)} style={{ ...styles.cancelBtn, padding: '8px 12px' }}>✕</button>
-            </div>
-
-            {detalle.archivoUrl && (
-              <div style={{ border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', overflow: 'hidden', marginBottom: '16px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', background: 'rgba(255,255,255,0.04)' }}>
-                  <span style={{ color: 'rgba(255,255,255,0.65)', fontSize: '12px' }}>📄 {detalle.archivoNombre || 'PDF'}</span>
-                  <a href={detalle.archivoUrl} target="_blank" rel="noreferrer" style={{ color: '#a78bfa', fontSize: '12px', fontWeight: '600', textDecoration: 'none' }}>
-                    Abrir →
-                  </a>
-                </div>
-                <iframe title="PDF entrega" src={detalle.archivoUrl} style={{ width: '100%', height: '420px', border: 'none', background: '#0f0c29' }} />
-              </div>
-            )}
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
-              <div style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', padding: '14px' }}>
-                <p style={{ color: 'rgba(255,255,255,0.45)', fontSize: '11px', margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Nota actual</p>
-                <div style={{ color: '#fff', fontSize: '34px', fontWeight: '800' }}>
-                  {detalle.estado === 'evaluado' ? `${detalle.notaFinal ?? '—'}/20` : '⏳ Pendiente'}
-                </div>
-                <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '13px', margin: '6px 0 0' }}>
-                  Nivel: {detalle.nivelGlobal || '—'}
-                </p>
-              </div>
-
-              <div style={{ background: 'rgba(102,126,234,0.08)', border: '1px solid rgba(102,126,234,0.2)', borderRadius: '12px', padding: '14px' }}>
-                <p style={{ color: '#a78bfa', fontSize: '11px', margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Nota manual</p>
-                <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                  <input
-                    value={notaManual}
-                    onChange={(e) => setNotaManual(e.target.value)}
-                    placeholder="0 - 20"
-                    style={{
-                      flex: 1,
-                      padding: '10px 12px',
-                      borderRadius: '10px',
-                      border: '1px solid rgba(255,255,255,0.12)',
-                      background: 'rgba(20,16,50,0.9)',
-                      color: '#fff',
-                      outline: 'none',
-                      fontSize: '14px',
-                    }}
-                  />
-                  <button
-                    onClick={guardarNotaManual}
-                    disabled={guardandoManual}
-                    style={{ ...styles.ctaBtn, padding: '10px 14px', fontSize: '13px' }}
-                  >
-                    {guardandoManual ? 'Guardando...' : 'Guardar'}
-                  </button>
-                </div>
-                <p style={{ color: 'rgba(255,255,255,0.35)', fontSize: '12px', margin: '10px 0 0' }}>
-                  Al guardar, se reemplaza la nota final y el nivel global.
-                </p>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '16px' }}>
-              <button style={styles.cancelBtn} onClick={() => setDetalle(null)}>Cerrar</button>
-              <button
-                style={styles.dangerBtn}
-                onClick={() => { setDetalle(null); setConfirm({ id: detalle.id, nombre: detalle.titulo || detalle.alumnoNombre }); }}
-              >
-                Eliminar entrega
-              </button>
             </div>
           </div>
         </div>
@@ -376,6 +299,12 @@ const styles = {
   statIcon: { fontSize: '24px', marginBottom: '12px' },
   statValue: { fontSize: '32px', fontWeight: '700', marginBottom: '4px' },
   statLabel: { color: 'rgba(255,255,255,0.4)', fontSize: '13px' },
+  cursosRow: { display: 'flex', gap: '12px', marginBottom: '24px', flexWrap: 'wrap' },
+  cursoMini: { flex: 1, minWidth: '160px', background: 'rgba(102,126,234,0.08)', borderRadius: '12px', padding: '16px', border: '1px solid rgba(102,126,234,0.15)', cursor: 'pointer' },
+  cursoMiniNombre: { color: '#fff', fontSize: '14px', fontWeight: '600', margin: '0 0 4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  cursoMiniSub: { color: 'rgba(255,255,255,0.4)', fontSize: '11px', margin: '0 0 8px' },
+  cursoMiniNota: { color: '#a78bfa', fontSize: '20px', fontWeight: '700', margin: '0 0 2px' },
+  cursoMiniCount: { color: 'rgba(255,255,255,0.3)', fontSize: '11px', margin: 0 },
   chartsGrid: { display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '16px', marginBottom: '24px' },
   chartCard: { background: 'rgba(255,255,255,0.04)', borderRadius: '16px', padding: '24px', border: '1px solid rgba(255,255,255,0.08)' },
   chartTitle: { color: '#fff', fontSize: '16px', fontWeight: '600', margin: '0 0 20px' },
