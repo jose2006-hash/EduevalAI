@@ -33,7 +33,7 @@ export default function VisualizarEntrega() {
   };
 
   const handleGuardarNota = async () => {
-    if (!notaEditada || notaEditada < 0 || notaEditada > 20) {
+    if (notaEditada === '' || isNaN(notaEditada) || notaEditada < 0 || notaEditada > 20) {
       setMensaje('❌ La nota debe estar entre 0 y 20');
       return;
     }
@@ -184,9 +184,9 @@ export default function VisualizarEntrega() {
                 <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '12px', marginBottom: '12px' }}>
                   {entrega.archivoNombre}
                 </p>
-                <iframe
-                  title="PDF del alumno"
-                  src={`${entrega.archivoUrl}#toolbar=1&navpanes=0&view=FitH`}
+                    <object
+                  data={entrega.archivoUrl}
+                  type="application/pdf"
                   style={{
                     width: '100%',
                     height: '600px',
@@ -194,9 +194,14 @@ export default function VisualizarEntrega() {
                     borderRadius: '8px',
                     background: '#fff',
                   }}
-                  frameBorder="0"
-                  allow="fullscreen"
-                />
+                >
+                  <p style={{ color: 'rgba(0,0,0,0.75)', padding: '18px', textAlign: 'center' }}>
+                    Tu navegador no puede mostrar este PDF.{' '}
+                    <a href={entrega.archivoUrl} target="_blank" rel="noopener noreferrer" style={{ color: '#2563eb' }}>
+                      Abrir en nueva pestaña
+                    </a>
+                  </p>
+                </object>
                 <a
                   href={entrega.archivoUrl}
                   target="_blank"

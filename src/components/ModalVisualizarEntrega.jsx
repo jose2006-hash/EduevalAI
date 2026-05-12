@@ -10,7 +10,7 @@ export default function ModalVisualizarEntrega({ entrega, onClose, onNotaActuali
   const [mensaje, setMensaje] = useState('');
 
   const handleGuardarNota = async () => {
-    if (!notaEditada || notaEditada < 0 || notaEditada > 20) {
+    if (notaEditada === '' || isNaN(notaEditada) || notaEditada < 0 || notaEditada > 20) {
       setMensaje('❌ La nota debe estar entre 0 y 20');
       return;
     }
@@ -130,22 +130,29 @@ export default function ModalVisualizarEntrega({ entrega, onClose, onNotaActuali
             <p style={s.pdfTitle}>📄 Documento PDF</p>
             {entrega.archivoUrl ? (
               <div style={s.pdfContainer}>
-                <iframe
-                  title="PDF del alumno"
-                  src={`${entrega.archivoUrl}#toolbar=1&navpanes=0&view=FitH`}
+                <object
+                  data={entrega.archivoUrl}
+                  type="application/pdf"
                   style={s.pdfIframe}
-                  frameBorder="0"
-                  allow="fullscreen"
-                />
-                <a
-                  href={entrega.archivoUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={s.downloadLink}
-                  download={entrega.archivoNombre}
                 >
-                  📥 Descargar PDF original
-                </a>
+                  <p style={s.noPdfMsg}>
+                    Tu navegador no puede mostrar este PDF.{' '}
+                    <a href={entrega.archivoUrl} target="_blank" rel="noopener noreferrer" style={{ color: '#22c55e' }}>
+                      Abrir en nueva pestaña
+                    </a>
+                  </p>
+                </object>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <a
+                    href={entrega.archivoUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={s.downloadLink}
+                    download={entrega.archivoNombre}
+                  >
+                    📥 Descargar PDF original
+                  </a>
+                </div>
               </div>
             ) : (
               <p style={s.noPdfMsg}>
