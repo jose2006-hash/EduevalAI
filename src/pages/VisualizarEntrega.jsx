@@ -186,7 +186,7 @@ export default function VisualizarEntrega() {
                 </p>
                 <iframe
                   title="PDF del alumno"
-                  src={entrega.archivoUrl}
+                  src={`${entrega.archivoUrl}#toolbar=1&navpanes=0&view=FitH`}
                   style={{
                     width: '100%',
                     height: '600px',
@@ -194,12 +194,15 @@ export default function VisualizarEntrega() {
                     borderRadius: '8px',
                     background: '#fff',
                   }}
+                  frameBorder="0"
+                  allow="fullscreen"
                 />
                 <a
                   href={entrega.archivoUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   style={s.descargarBtn}
+                  download={entrega.archivoNombre}
                 >
                   📥 Descargar PDF original
                 </a>

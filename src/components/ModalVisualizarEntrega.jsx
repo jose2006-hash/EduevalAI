@@ -132,16 +132,19 @@ export default function ModalVisualizarEntrega({ entrega, onClose, onNotaActuali
               <div style={s.pdfContainer}>
                 <iframe
                   title="PDF del alumno"
-                  src={entrega.archivoUrl}
+                  src={`${entrega.archivoUrl}#toolbar=1&navpanes=0&view=FitH`}
                   style={s.pdfIframe}
+                  frameBorder="0"
+                  allow="fullscreen"
                 />
                 <a
                   href={entrega.archivoUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   style={s.downloadLink}
+                  download={entrega.archivoNombre}
                 >
-                  📥 Descargar PDF
+                  📥 Descargar PDF original
                 </a>
               </div>
             ) : (
