@@ -14,6 +14,7 @@ import {
   eliminarEntrega,
 } from '../firebase/services.js';
 import { useAuth } from '../components/AuthContext.jsx';
+import ModalVisualizarEntrega from '../components/ModalVisualizarEntrega.jsx';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, PointElement, LineElement, Title, Tooltip, Legend);
 
@@ -26,6 +27,7 @@ export default function DashboardDocente() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [confirm, setConfirm] = useState(null);
+  const [entregaSeleccionada, setEntregaSeleccionada] = useState(null);
 
   useEffect(() => { if (userData?.uid) cargar(); }, [userData]);
 
@@ -102,6 +104,11 @@ export default function DashboardDocente() {
     await eliminarEntrega(confirm.id);
     setEntregas(prev => prev.filter(e => e.id !== confirm.id));
     setConfirm(null);
+  };
+
+  const handleNotaActualizada = (entregaActualizada) => {
+    setEntregas(prev => prev.map(e => e.id === entregaActualizada.id ? entregaActualizada : e));
+    setEntregaSeleccionada(entregaActualizada);
   };
 
   const handleLogout = async () => { await logoutUser(); navigate('/login'); };
@@ -242,10 +249,16 @@ export default function DashboardDocente() {
                       {ev.creadoEn?.toDate?.()?.toLocaleDateString('es-PE') || '—'}
                     </td>
                     <td style={styles.td}>
-                      <button style={styles.deleteBtn} title="Eliminar entrega"
-                        onClick={() => setConfirm({ id: ev.id, nombre: ev.titulo || ev.alumnoNombre })}>
-                        🗑
-                      </button>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        <button style={styles.viewBtn} title="Ver detalle"
+                          onClick={() => setEntregaSeleccionada(ev)}>
+                          👁️
+                        </button>
+                        <button style={styles.deleteBtn} title="Eliminar entrega"
+                          onClick={() => setConfirm({ id: ev.id, nombre: ev.titulo || ev.alumnoNombre })}>
+                          🗑
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -275,6 +288,15 @@ export default function DashboardDocente() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Modal visualizar entrega */}
+      {entregaSeleccionada && (
+        <ModalVisualizarEntrega
+          entrega={entregaSeleccionada}
+          onClose={() => setEntregaSeleccionada(null)}
+          onNotaActualizada={handleNotaActualizada}
+        />
       )}
     </div>
   );
@@ -315,6 +337,7 @@ const styles = {
   td: { color: 'rgba(255,255,255,0.8)', fontSize: '13px', padding: '12px' },
   badge: { padding: '4px 10px', borderRadius: '8px', fontSize: '13px', fontWeight: '600' },
   tipoBadge: { background: 'rgba(102,126,234,0.15)', color: '#a78bfa', padding: '3px 8px', borderRadius: '6px', fontSize: '11px', whiteSpace: 'nowrap' },
+  viewBtn: { background: 'rgba(59,182,246,0.12)', border: '1px solid rgba(59,182,246,0.2)', color: '#3b82f6', borderRadius: '8px', cursor: 'pointer', padding: '5px 9px', fontSize: '14px' },
   deleteBtn: { background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.2)', color: '#ef4444', borderRadius: '8px', cursor: 'pointer', padding: '5px 9px', fontSize: '14px' },
   overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 },
   confirmModal: { background: '#1a1535', borderRadius: '20px', padding: '36px', width: '100%', maxWidth: '420px', border: '1px solid rgba(255,255,255,0.1)', textAlign: 'center' },

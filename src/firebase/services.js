@@ -10,7 +10,8 @@ import {
   updateProfile,
   deleteUser,
 } from 'firebase/auth';
-import { db, auth } from './config.js';
+import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
+import { db, auth, storage } from './config.js';
 
 // ─── AUTH ────────────────────────────────────────────────────────────────────
 
@@ -271,10 +272,31 @@ export const editarNotaEntrega = (id, notaFinal, comentarioDocente = '') =>
       : 'Insuficiente',
   });
 
-export const subirPdfEntrega = async ({ file }) =>
-  ({ archivoNombre: file?.name || null, archivoUrl: null });
+// ─── ARCHIVOS (Storage) ──────────────────────────────────────────────────────
 
-export const eliminarArchivoEntrega = async () => {};
+export const subirPdfEntrega = async (file, alumnoUid, cursoId, timestamp) => {
+  if (!file) return { archivoNombre: null, archivoUrl: null };
+  try {
+    const path = `entregas/${cursoId}/${alumnoUid}/${timestamp}_${file.name}`;
+    const storageRef = ref(storage, path);
+    await uploadBytes(storageRef, file);
+    const url = await getDownloadURL(storageRef);
+    return { archivoNombre: file.name, archivoUrl: url };
+  } catch (err) {
+    console.error('Error subiendo PDF:', err);
+    return { archivoNombre: file?.name || null, archivoUrl: null };
+  }
+};
+
+export const eliminarArchivoEntrega = async (archivoUrl) => {
+  if (!archivoUrl) return;
+  try {
+    const storageRef = ref(storage, archivoUrl);
+    await deleteObject(storageRef);
+  } catch (err) {
+    console.error('Error eliminando archivo:', err);
+  }
+};
 
 export const eliminarEntrega = (id) => deleteDoc(doc(db, 'entregas', id));
 

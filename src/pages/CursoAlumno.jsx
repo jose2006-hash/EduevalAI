@@ -5,7 +5,7 @@ import {
   getCurso, getEntregasByAlumnoYCurso, crearEntrega, eliminarEntrega,
   actualizarEntregaAlumno,
   calcularNotaFinal, getRubricas, getActividadesByCurso,
-  getMatriculasByAlumno, eliminarMatricula,
+  getMatriculasByAlumno, eliminarMatricula, subirPdfEntrega,
 } from '../firebase/services.js';
 import { evaluarTrabajo } from '../openai/evaluador.js';
 import { useAuth } from '../components/AuthContext.jsx';
@@ -157,6 +157,10 @@ export default function CursoAlumno() {
         );
       }
 
+      // Subir PDF a Storage
+      const timestamp = Date.now();
+      const archivoData = await subirPdfEntrega(archivo, user.uid, cursoId, timestamp);
+
       const datosEntrega = {
         alumnoUid: user.uid, alumnoNombre: userData.nombre,
         cursoId, cursoNombre: curso.nombre,
@@ -165,7 +169,8 @@ export default function CursoAlumno() {
         actividadTitulo: actividadSeleccionada?.titulo || null,
         titulo: form.titulo,
         texto: textoFinal,
-        archivoNombre: archivo?.name || null,
+        archivoNombre: archivoData.archivoNombre,
+        archivoUrl: archivoData.archivoUrl,
         rubricaId: rubrica?.id || null,
         rubricaNombre: rubrica?.nombre || null,
         estado: resultado ? 'evaluado' : 'pendiente',
