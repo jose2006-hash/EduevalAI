@@ -11,13 +11,16 @@ import { evaluarTrabajo } from '../openai/evaluador.js';
 import { useAuth } from '../components/AuthContext.jsx';
 
 const MAX_ENTREGAS_POR_ACTIVIDAD = 2;
-// Tipos de archivo aceptados
-const TIPOS_ACEPTADOS = '.pdf,.doc,.docx';
+const TIPOS_ACEPTADOS = '.pdf,.docx';
 const MIME_ACEPTADOS = [
   'application/pdf',
-  'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 ];
+
+const esArchivoValido = (file) =>
+  MIME_ACEPTADOS.includes(file.type) ||
+  file.name?.toLowerCase().endsWith('.pdf') ||
+  file.name?.toLowerCase().endsWith('.docx');
 
 export default function CursoAlumno() {
   const { cursoId } = useParams();
@@ -78,22 +81,19 @@ export default function CursoAlumno() {
     setForm(f => ({ ...f, actividadId: id, titulo: act ? act.titulo : '', rubricaId: act?.rubricaId || f.rubricaId }));
   };
 
-  const procesarArchivo = (file) => {
+  const procesarArchivo = async (file) => {
     if (!file) return;
-    const esValido = MIME_ACEPTADOS.includes(file.type) ||
-      file.name.toLowerCase().endsWith('.pdf') ||
-      file.name.toLowerCase().endsWith('.doc') ||
-      file.name.toLowerCase().endsWith('.docx');
-    if (!esValido) {
-      setError('Solo se aceptan archivos PDF o Word (.pdf, .doc, .docx)');
+    if (!esArchivoValido(file)) {
+      setError('Solo se aceptan archivos PDF o Word (.docx)');
       return;
     }
     setError('');
     setArchivo(file);
-    // Preview solo para PDF
+    setTabActivo('archivo');
     try {
       if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl);
-      if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+      // Solo generamos preview para PDF
+      if (file.type === 'application/pdf' || file.name?.toLowerCase().endsWith('.pdf')) {
         setPdfPreviewUrl(URL.createObjectURL(file));
       } else {
         setPdfPreviewUrl('');
@@ -103,15 +103,19 @@ export default function CursoAlumno() {
 
   const handleDragOver = (e) => { e.preventDefault(); setDragging(true); };
   const handleDragLeave = () => setDragging(false);
-  const handleDrop = (e) => { e.preventDefault(); setDragging(false); procesarArchivo(e.dataTransfer.files[0]); };
-  const handleFileInput = (e) => { procesarArchivo(e.target.files[0]); };
+  const handleDrop = async (e) => { e.preventDefault(); setDragging(false); await procesarArchivo(e.dataTransfer.files[0]); };
+  const handleFileInput = async (e) => { await procesarArchivo(e.target.files[0]); };
 
   const handleEnviar = async () => {
-    if (tabActivo === 'archivo' && !archivo) return setError('Sube un archivo PDF o Word');
-    if (tabActivo === 'texto' && !form.texto?.trim()) return setError('Escribe el contenido de tu trabajo');
+    const usandoArchivo = tabActivo === 'archivo';
+    const usandoTexto = tabActivo === 'texto';
+
+    if (usandoArchivo && !archivo) return setError('Sube un PDF o archivo Word');
+    if (usandoTexto && !form.texto?.trim()) return setError('Escribe el contenido de tu trabajo');
     if (!form.tipoEvaluacion) return setError('Selecciona el tipo de evaluación');
     if (!form.titulo.trim()) return setError('Ingresa un título para tu trabajo');
 
+    // Verificar fecha límite
     if (actividadSeleccionada?.fechaLimite) {
       const limite = new Date(actividadSeleccionada.fechaLimite);
       if (!Number.isNaN(limite.getTime()) && new Date() > limite) {
@@ -119,6 +123,7 @@ export default function CursoAlumno() {
       }
     }
 
+    // Verificar límite de entregas por actividad
     if (!editEntrega && form.actividadId) {
       const count = contarEntregasActividad(form.actividadId);
       if (count >= MAX_ENTREGAS_POR_ACTIVIDAD) {
@@ -133,8 +138,8 @@ export default function CursoAlumno() {
       let resultado = null;
 
       if (rubrica) {
-        // Si hay archivo lo pasamos directo (sin extraer texto)
-        const inputEvaluacion = tabActivo === 'archivo' && archivo ? archivo : form.texto;
+        // Evaluar con el archivo directo (sin extraer texto)
+        const inputEvaluacion = usandoArchivo && archivo ? archivo : form.texto;
         resultado = await evaluarTrabajo(
           inputEvaluacion, rubrica, curso.nombre, form.titulo,
           curso.silaboTexto || '', enunciadoTexto
@@ -143,9 +148,7 @@ export default function CursoAlumno() {
 
       // Subir archivo a Storage
       const timestamp = Date.now();
-      const archivoData = archivo
-        ? await subirPdfEntrega(archivo, user.uid, cursoId, timestamp)
-        : { archivoNombre: null, archivoUrl: null };
+      const archivoData = await subirPdfEntrega(archivo, user.uid, cursoId, timestamp);
 
       const datosEntrega = {
         alumnoUid: user.uid, alumnoNombre: userData.nombre,
@@ -154,9 +157,9 @@ export default function CursoAlumno() {
         actividadId: form.actividadId || null,
         actividadTitulo: actividadSeleccionada?.titulo || null,
         titulo: form.titulo,
-        texto: tabActivo === 'texto' ? form.texto : '',
-        archivoNombre: archivoData.archivoNombre,
-        archivoUrl: archivoData.archivoUrl,
+        texto: usandoTexto ? form.texto : '',
+        archivoNombre: archivoData?.archivoNombre || archivo?.name || null,
+        archivoUrl: archivoData?.archivoUrl || null,
         rubricaId: rubrica?.id || null,
         rubricaNombre: rubrica?.nombre || null,
         estado: resultado ? 'evaluado' : 'pendiente',
@@ -237,6 +240,10 @@ export default function CursoAlumno() {
     return '#ef4444';
   };
 
+  const esArchivoWord = (file) =>
+    file?.name?.toLowerCase().endsWith('.docx') ||
+    file?.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
   if (loading) return (
     <div style={{ ...s.container, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <p style={{ color: 'rgba(255,255,255,0.5)' }}>Cargando curso...</p>
@@ -248,8 +255,6 @@ export default function CursoAlumno() {
   curso?.tiposEvaluacion?.forEach(t => {
     entregasPorTipo[t.nombre] = entregas.filter(e => e.tipoEvaluacion === t.nombre);
   });
-
-  const esPdf = (url) => url && (url.includes('.pdf') || url.includes('application%2Fpdf'));
 
   return (
     <div style={s.container}>
@@ -472,33 +477,37 @@ export default function CursoAlumno() {
               </div>
             </div>
 
+            {/* Tabs */}
             <div style={s.tabs}>
               <button style={{ ...s.tab, ...(tabActivo === 'archivo' ? s.tabActivo : {}) }} onClick={() => setTabActivo('archivo')}>
-                📄 Subir archivo (PDF / Word)
+                📄 Subir archivo (PDF o Word)
               </button>
               <button style={{ ...s.tab, ...(tabActivo === 'texto' ? s.tabActivo : {}) }} onClick={() => setTabActivo('texto')}>
                 ✏️ Escribir texto
               </button>
             </div>
 
+            {/* Zona de subida de archivo */}
             {tabActivo === 'archivo' && (
-              <div
-                ref={dropRef}
+              <div ref={dropRef}
                 style={{ ...s.dropZone, ...(dragging ? s.dropZoneActive : {}), ...(archivo ? s.dropZoneDone : {}) }}
-                onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}
-              >
+                onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
                 {archivo ? (
                   <div style={s.dropContent}>
-                    <span style={{ fontSize: '40px' }}>✅</span>
+                    <span style={{ fontSize: '40px' }}>{esArchivoWord(archivo) ? '📝' : '✅'}</span>
                     <p style={{ ...s.dropText, color: '#22c55e' }}>{archivo.name}</p>
-                    <p style={s.dropHint}>Archivo listo para evaluar · se enviará directamente a la IA</p>
-                    <button style={s.clearBtn} onClick={() => { setArchivo(null); setPdfPreviewUrl(''); }}>Quitar archivo</button>
+                    <p style={s.dropHint}>
+                      {esArchivoWord(archivo) ? 'Archivo Word listo para evaluar' : 'PDF listo para evaluar'}
+                    </p>
+                    <button style={s.clearBtn} onClick={() => { setArchivo(null); setPdfPreviewUrl(''); }}>
+                      Quitar archivo
+                    </button>
                   </div>
                 ) : (
                   <div style={s.dropContent}>
                     <span style={{ fontSize: '48px' }}>{dragging ? '📂' : '📄'}</span>
-                    <p style={s.dropText}>{dragging ? 'Suelta el archivo aquí' : 'Arrastra tu PDF o Word aquí'}</p>
-                    <p style={s.dropHint}>o haz clic para seleccionar · .pdf, .doc, .docx</p>
+                    <p style={s.dropText}>{dragging ? 'Suelta el archivo aquí' : 'Arrastra tu archivo aquí'}</p>
+                    <p style={s.dropHint}>PDF o Word (.docx) · o haz clic para seleccionar</p>
                     <label style={s.selectFileBtn}>
                       Seleccionar archivo
                       <input type="file" accept={TIPOS_ACEPTADOS} style={{ display: 'none' }} onChange={handleFileInput} />
@@ -508,13 +517,34 @@ export default function CursoAlumno() {
               </div>
             )}
 
-            {/* Preview PDF (solo si es PDF) */}
-            {tabActivo === 'archivo' && pdfPreviewUrl && (
+            {/* Preview solo para PDF */}
+            {tabActivo === 'archivo' && pdfPreviewUrl && archivo && !esArchivoWord(archivo) && (
               <div style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', overflow: 'hidden', marginBottom: '16px' }}>
                 <p style={{ padding: '8px 12px', background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.5)', fontSize: '12px', margin: 0 }}>
                   Vista previa del PDF
                 </p>
                 <iframe title="Vista previa" src={pdfPreviewUrl} style={{ width: '100%', height: '320px', border: 'none', background: '#0f0c29' }} />
+              </div>
+            )}
+
+            {/* Preview para Word */}
+            {tabActivo === 'archivo' && archivo && esArchivoWord(archivo) && (
+              <div style={{ background: 'rgba(102,126,234,0.08)', border: '1px solid rgba(102,126,234,0.2)', borderRadius: '12px', padding: '14px 16px', marginBottom: '16px' }}>
+                <p style={{ color: '#a78bfa', fontSize: '13px', margin: 0 }}>
+                  📝 Archivo Word seleccionado: <strong>{archivo.name}</strong> — será evaluado directamente por la IA.
+                </p>
+              </div>
+            )}
+
+            {/* Si estaba editando y tenía un archivo previo */}
+            {tabActivo === 'archivo' && !archivo && editEntrega?.archivoUrl && (
+              <div style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', padding: '14px 16px', marginBottom: '16px' }}>
+                <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '13px', margin: '0 0 8px' }}>
+                  Archivo anterior: <strong style={{ color: '#fff' }}>{editEntrega.archivoNombre}</strong>
+                </p>
+                <p style={{ color: 'rgba(255,255,255,0.35)', fontSize: '12px', margin: 0 }}>
+                  Sube un nuevo archivo para reemplazarlo, o déjalo así para mantener el actual.
+                </p>
               </div>
             )}
 
@@ -528,7 +558,7 @@ export default function CursoAlumno() {
             {enviando && (
               <div style={s.evaluandoMsg}>
                 <div style={s.spinner} />
-                Evaluando con IA{actividadSeleccionada?.enunciadoTexto ? ' (con enunciado del docente)' : ''}... esto puede tardar unos segundos
+                Evaluando con IA{actividadSeleccionada?.enunciadoTexto ? ' (con enunciado del docente)' : ''}... esto puede tomar unos segundos.
               </div>
             )}
 
@@ -632,20 +662,19 @@ export default function CursoAlumno() {
 
             {/* Ver archivo del alumno */}
             {entregaSeleccionada.archivoUrl && (
-              <div style={{ marginTop: '16px', background: 'rgba(255,255,255,0.03)', borderRadius: '10px', padding: '14px', border: '1px solid rgba(255,255,255,0.08)' }}>
-                <p style={{ color: 'rgba(255,255,255,0.45)', fontSize: '12px', margin: '0 0 10px' }}>📄 Tu archivo entregado</p>
-                {esPdf(entregaSeleccionada.archivoUrl) ? (
-                  <iframe
-                    title="Tu entrega"
-                    src={entregaSeleccionada.archivoUrl}
-                    style={{ width: '100%', height: '300px', border: 'none', borderRadius: '8px' }}
-                  />
-                ) : (
+              <div style={{ marginTop: '16px', background: 'rgba(255,255,255,0.03)', borderRadius: '12px', padding: '14px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                  <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', margin: 0 }}>
+                    📄 Mi archivo entregado
+                  </p>
                   <a href={entregaSeleccionada.archivoUrl} target="_blank" rel="noreferrer"
-                    style={{ color: '#a78bfa', fontWeight: '600', fontSize: '14px' }}>
-                    📥 Descargar {entregaSeleccionada.archivoNombre || 'archivo'}
+                    style={{ color: '#a78bfa', fontSize: '13px', fontWeight: '600', textDecoration: 'none' }}>
+                    Abrir / Descargar →
                   </a>
-                )}
+                </div>
+                <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '12px', margin: 0 }}>
+                  {entregaSeleccionada.archivoNombre}
+                </p>
               </div>
             )}
 
@@ -720,7 +749,7 @@ const s = {
   input: { width: '100%', padding: '11px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.06)', color: '#fff', fontSize: '14px', outline: 'none', boxSizing: 'border-box' },
   select: { width: '100%', padding: '11px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(20,16,50,0.95)', color: '#fff', fontSize: '14px', outline: 'none', boxSizing: 'border-box' },
   tabs: { display: 'flex', background: 'rgba(255,255,255,0.06)', borderRadius: '10px', padding: '4px', marginBottom: '16px', gap: '4px' },
-  tab: { flex: 1, padding: '10px', borderRadius: '8px', border: 'none', background: 'transparent', color: 'rgba(255,255,255,0.5)', fontSize: '13px', fontWeight: '500', cursor: 'pointer' },
+  tab: { flex: 1, padding: '10px', borderRadius: '8px', border: 'none', background: 'transparent', color: 'rgba(255,255,255,0.5)', fontSize: '14px', fontWeight: '500', cursor: 'pointer' },
   tabActivo: { background: 'rgba(255,255,255,0.1)', color: '#fff', fontWeight: '600' },
   dropZone: { border: '2px dashed rgba(102,126,234,0.35)', borderRadius: '16px', padding: '40px 20px', textAlign: 'center', cursor: 'pointer', background: 'rgba(102,126,234,0.04)', marginBottom: '16px', transition: 'all 0.2s' },
   dropZoneActive: { border: '2px dashed #667eea', background: 'rgba(102,126,234,0.12)' },

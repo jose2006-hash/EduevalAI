@@ -8,7 +8,7 @@ import {
   crearActividad, getActividadesByCurso, eliminarActividad,
   getEntregasByCurso, eliminarEntrega,
   getRubricas,
-  actualizarEntregaAlumno,
+  actualizarEntregaAlumno, // ← para editar nota
 } from '../firebase/services.js';
 import { useAuth } from '../components/AuthContext.jsx';
 
@@ -51,11 +51,12 @@ export default function GestionCursos() {
   const [filtroAlumno, setFiltroAlumno] = useState('');
   const [filtroTipo, setFiltroTipo] = useState('');
 
-  // Edición de nota por docente
+  // ── Edición de nota por docente ──────────────────────────────────────────
   const [editandoNota, setEditandoNota] = useState(false);
   const [notaEditada, setNotaEditada] = useState('');
   const [comentarioDocente, setComentarioDocente] = useState('');
   const [guardandoNota, setGuardandoNota] = useState(false);
+  const [msgNota, setMsgNota] = useState('');
 
   const [form, setForm] = useState({
     nombre: '', seccion: '', codigo: '', descripcion: '', ciclo: '',
@@ -114,51 +115,69 @@ export default function GestionCursos() {
     setConfirm(null);
   };
 
-  // Abrir entregas del curso
-  const abrirEntregas = async (curso) => {
-    setCursoEntregas(curso);
-    setFiltroAlumno(''); setFiltroTipo(''); setEntregaDetalle(null);
-    const ents = await getEntregasByCurso(curso.id);
-    ents.sort((a, b) => (b.creadoEn?.seconds || 0) - (a.creadoEn?.seconds || 0));
-    setEntregas(ents);
-  };
-
-  // Abrir detalle y resetear edición de nota
-  const abrirDetalle = (e) => {
-    setEntregaDetalle(e);
-    setEditandoNota(false);
-    setNotaEditada(String(e.notaFinal ?? ''));
-    setComentarioDocente(e.comentarioDocente || '');
-  };
-
-  // Guardar nota modificada por docente
+  // ── Guardar nota editada por docente ──────────────────────────────────────
   const handleGuardarNota = async () => {
     const nota = parseFloat(notaEditada);
     if (isNaN(nota) || nota < 0 || nota > 20) {
-      return alert('La nota debe ser un número entre 0 y 20');
+      return setMsgNota('❌ La nota debe ser un número entre 0 y 20');
     }
-    setGuardandoNota(true);
+    setGuardandoNota(true); setMsgNota('');
     try {
-      const datosActualizados = {
+      const porcentaje = Math.round((nota / 20) * 100);
+      let nivelGlobal = 'Insuficiente';
+      if (nota >= 17) nivelGlobal = 'Excelente';
+      else if (nota >= 14) nivelGlobal = 'Bueno';
+      else if (nota >= 11) nivelGlobal = 'Regular';
+
+      await actualizarEntregaAlumno(entregaDetalle.id, {
         notaFinal: nota,
+        porcentaje,
+        nivelGlobal,
         notaEditadaManualmente: true,
         comentarioDocente: comentarioDocente.trim(),
+        estado: 'evaluado',
+      });
+
+      // Actualizar en local
+      const entregaActualizada = {
+        ...entregaDetalle,
+        notaFinal: nota,
+        porcentaje,
+        nivelGlobal,
+        notaEditadaManualmente: true,
+        comentarioDocente: comentarioDocente.trim(),
+        estado: 'evaluado',
       };
-      await actualizarEntregaAlumno(entregaDetalle.id, datosActualizados);
-      const entregaActualizada = { ...entregaDetalle, ...datosActualizados };
       setEntregaDetalle(entregaActualizada);
-      // Actualizar en la lista también
-      setEntregas(prev => prev.map(e => e.id === entregaDetalle.id ? entregaActualizada : e));
+      const ents = await getEntregasByCurso(cursoEntregas.id);
+      setEntregas(ents);
+      setMsgNota('✅ Nota guardada correctamente');
       setEditandoNota(false);
-      setMsg('✅ Nota actualizada correctamente');
     } catch (err) {
-      alert('Error al guardar: ' + err.message);
+      setMsgNota('❌ Error al guardar: ' + err.message);
     } finally {
       setGuardandoNota(false);
     }
   };
 
-  // Actividades
+  const abrirEditarNota = () => {
+    setNotaEditada(String(entregaDetalle.notaFinal ?? ''));
+    setComentarioDocente(entregaDetalle.comentarioDocente || '');
+    setMsgNota('');
+    setEditandoNota(true);
+  };
+
+  // ── Abrir entregas del curso ───────────────────────────────────────────────
+  const abrirEntregas = async (curso) => {
+    setCursoEntregas(curso);
+    setFiltroAlumno(''); setFiltroTipo(''); setEntregaDetalle(null);
+    setEditandoNota(false); setMsgNota('');
+    const ents = await getEntregasByCurso(curso.id);
+    ents.sort((a, b) => (b.creadoEn?.seconds || 0) - (a.creadoEn?.seconds || 0));
+    setEntregas(ents);
+  };
+
+  // ── Actividades ────────────────────────────────────────────────────────────
   const abrirActividades = async (curso) => {
     setCursoActividades(curso);
     setShowActForm(false); setMsgAct('');
@@ -268,20 +287,27 @@ export default function GestionCursos() {
     return '#ef4444';
   };
 
+  // Construir URL de visor para el archivo del alumno
+  const getViewerUrl = (url, nombre) => {
+    if (!url) return null;
+    const esDocx = nombre?.toLowerCase().endsWith('.docx');
+    const esPdf = nombre?.toLowerCase().endsWith('.pdf') || (!esDocx);
+    if (esDocx) {
+      // Word → Google Docs viewer
+      return `https://docs.google.com/gview?url=${encodeURIComponent(url)}&embedded=true`;
+    }
+    // PDF → Google Docs viewer (más compatible que iframe directo con CORS)
+    return `https://docs.google.com/gview?url=${encodeURIComponent(url)}&embedded=true`;
+  };
+
   const entregasFiltradas = entregas.filter(e => {
     const matchAlumno = !filtroAlumno || e.alumnoNombre?.toLowerCase().includes(filtroAlumno.toLowerCase());
     const matchTipo = !filtroTipo || e.tipoEvaluacion === filtroTipo;
     return matchAlumno && matchTipo;
   });
 
+  const alumnosUnicos = [...new Set(entregas.map(e => e.alumnoNombre).filter(Boolean))];
   const tiposUnicos = [...new Set(entregas.map(e => e.tipoEvaluacion).filter(Boolean))];
-
-  // ¿El archivo es un PDF (para decidir si mostrar iframe o link)?
-  const esArchivoVisualizablePdf = (url) => {
-    if (!url) return false;
-    const lower = url.toLowerCase();
-    return lower.includes('.pdf') || lower.includes('application%2Fpdf') || lower.includes('application/pdf');
-  };
 
   return (
     <div style={s.container}>
@@ -339,7 +365,7 @@ export default function GestionCursos() {
         )}
       </div>
 
-      {/* Modal confirmación */}
+      {/* ── Modal confirmación ── */}
       {confirm && (
         <div style={s.overlay}>
           <div style={{ ...s.modal, maxWidth: '420px', textAlign: 'center' }}>
@@ -360,7 +386,7 @@ export default function GestionCursos() {
         </div>
       )}
 
-      {/* Modal lista de entregas */}
+      {/* ── Modal entregas de alumnos ── */}
       {cursoEntregas && !entregaDetalle && (
         <div style={s.overlay}>
           <div style={{ ...s.modal, maxWidth: '900px' }}>
@@ -395,7 +421,7 @@ export default function GestionCursos() {
                 <table style={s.table}>
                   <thead>
                     <tr>
-                      {['Alumno', 'Trabajo', 'Tipo', 'Nota', 'Nivel', 'Fecha', ''].map(h => (
+                      {['Alumno', 'Trabajo', 'Tipo', 'Nota', 'Nivel', 'Archivo', 'Fecha', ''].map(h => (
                         <th key={h} style={s.th}>{h}</th>
                       ))}
                     </tr>
@@ -403,7 +429,7 @@ export default function GestionCursos() {
                   <tbody>
                     {entregasFiltradas.map((e, i) => (
                       <tr key={i} style={{ ...s.tr, cursor: 'pointer' }}
-                        onClick={() => abrirDetalle(e)}>
+                        onClick={() => { setEntregaDetalle(e); setEditandoNota(false); setMsgNota(''); }}>
                         <td style={s.td}>
                           <span style={{ color: '#fff', fontWeight: '500' }}>{e.alumnoNombre || '—'}</span>
                         </td>
@@ -423,13 +449,20 @@ export default function GestionCursos() {
                               color: e.notaFinal >= 14 ? '#22c55e' : e.notaFinal >= 11 ? '#f59e0b' : '#ef4444',
                             }}>
                               {e.notaFinal}/20
-                              {e.notaEditadaManualmente && <span style={{ fontSize: '10px', marginLeft: '4px' }}>✏️</span>}
+                              {e.notaEditadaManualmente && ' ✏️'}
                             </span>
                           ) : (
                             <span style={{ color: '#f59e0b', fontSize: '12px' }}>⏳ Pendiente</span>
                           )}
                         </td>
                         <td style={s.td}>{e.nivelGlobal || '—'}</td>
+                        <td style={s.td}>
+                          {e.archivoNombre ? (
+                            <span style={{ color: '#a78bfa', fontSize: '11px' }}>
+                              {e.archivoNombre.toLowerCase().endsWith('.docx') ? '📝' : '📄'} {e.archivoNombre}
+                            </span>
+                          ) : '—'}
+                        </td>
                         <td style={s.td}>
                           {e.creadoEn?.toDate?.()?.toLocaleDateString('es-PE') || '—'}
                         </td>
@@ -450,10 +483,10 @@ export default function GestionCursos() {
         </div>
       )}
 
-      {/* Modal detalle entrega — docente ve el PDF original + puede editar nota */}
+      {/* ── Modal detalle entrega (docente) ── */}
       {entregaDetalle && (
         <div style={s.overlay}>
-          <div style={{ ...s.modal, maxWidth: '820px' }}>
+          <div style={{ ...s.modal, maxWidth: '800px' }}>
             <div style={s.modalHeader}>
               <div>
                 <h2 style={s.modalTitle}>{entregaDetalle.titulo}</h2>
@@ -471,68 +504,69 @@ export default function GestionCursos() {
             </div>
 
             {/* Nota + edición */}
-            <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '14px', padding: '20px', marginBottom: '20px', border: '1px solid rgba(255,255,255,0.08)' }}>
+            <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '14px', padding: '20px', marginBottom: '20px' }}>
               {!editandoNota ? (
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
-                  <div>
+                  <div style={{ textAlign: 'center' }}>
                     {entregaDetalle.estado === 'evaluado' ? (
                       <>
-                        <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
-                          <span style={{ fontSize: '48px', fontWeight: '800', color: nivelColor(entregaDetalle.notaFinal) }}>
-                            {entregaDetalle.notaFinal}
-                          </span>
-                          <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '22px' }}>/20</span>
-                          <span style={{ color: nivelColor(entregaDetalle.notaFinal), fontWeight: '600', fontSize: '16px', marginLeft: '8px' }}>
-                            {entregaDetalle.nivelGlobal}
-                          </span>
+                        <div style={{ fontSize: '48px', fontWeight: '800', color: nivelColor(entregaDetalle.notaFinal) }}>
+                          {entregaDetalle.notaFinal}<span style={{ fontSize: '20px', opacity: 0.5 }}>/20</span>
                         </div>
-                        {entregaDetalle.notaEditadaManualmente && (
-                          <p style={{ color: '#60a5fa', fontSize: '12px', margin: '4px 0 0' }}>
-                            ✏️ Nota ajustada manualmente
-                            {entregaDetalle.comentarioDocente && ` — "${entregaDetalle.comentarioDocente}"`}
+                        <div style={{ color: nivelColor(entregaDetalle.notaFinal), fontWeight: '600', fontSize: '16px' }}>
+                          {entregaDetalle.nivelGlobal}
+                          {entregaDetalle.notaEditadaManualmente && (
+                            <span style={{ color: '#60a5fa', fontSize: '12px', marginLeft: '8px' }}>✏️ Editada</span>
+                          )}
+                        </div>
+                        {entregaDetalle.comentarioDocente && (
+                          <p style={{ color: '#93c5fd', fontSize: '13px', margin: '6px 0 0', fontStyle: 'italic' }}>
+                            "{entregaDetalle.comentarioDocente}"
                           </p>
                         )}
                       </>
                     ) : (
-                      <span style={{ color: '#f59e0b', fontSize: '16px' }}>⏳ Sin evaluar automáticamente</span>
+                      <span style={{ color: '#f59e0b', fontSize: '16px' }}>⏳ Sin evaluar</span>
                     )}
                   </div>
-                  <button
-                    style={{ ...s.editNotaBtn }}
-                    onClick={() => {
-                      setEditandoNota(true);
-                      setNotaEditada(String(entregaDetalle.notaFinal ?? ''));
-                      setComentarioDocente(entregaDetalle.comentarioDocente || '');
-                    }}
-                  >
-                    ✏️ Modificar nota
+                  <button style={s.editarNotaBtn} onClick={abrirEditarNota}>
+                    ✏️ {entregaDetalle.estado === 'evaluado' ? 'Modificar nota' : 'Asignar nota'}
                   </button>
                 </div>
               ) : (
                 <div>
-                  <p style={{ color: '#a78bfa', fontSize: '13px', fontWeight: '600', margin: '0 0 12px' }}>✏️ Editar nota del alumno</p>
-                  <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                  <p style={{ color: '#a78bfa', fontSize: '13px', fontWeight: '600', margin: '0 0 12px' }}>
+                    ✏️ Editar nota del alumno
+                  </p>
+                  <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: '12px' }}>
                     <div>
-                      <label style={s.label}>Nueva nota (0-20)</label>
+                      <label style={{ ...s.labelSmall }}>Nueva nota (0–20)</label>
                       <input
-                        style={{ ...s.input, width: '100px', fontSize: '20px', fontWeight: '700', textAlign: 'center' }}
+                        style={{ ...s.input, width: '100px', fontSize: '18px', fontWeight: '700', textAlign: 'center' }}
                         type="number" min="0" max="20" step="0.5"
                         value={notaEditada}
                         onChange={e => setNotaEditada(e.target.value)}
                       />
                     </div>
-                    <div style={{ flex: 1, minWidth: '200px' }}>
-                      <label style={s.label}>Comentario (opcional)</label>
+                    <div style={{ flex: 1 }}>
+                      <label style={s.labelSmall}>Comentario para el alumno (opcional)</label>
                       <input
                         style={s.input}
-                        placeholder="Ej: Revisado en clase, nota ajustada..."
+                        placeholder="Ej: Revisión manual por ausencia de firma..."
                         value={comentarioDocente}
                         onChange={e => setComentarioDocente(e.target.value)}
                       />
                     </div>
                   </div>
-                  <div style={{ display: 'flex', gap: '10px', marginTop: '14px' }}>
-                    <button style={s.secondaryBtn} onClick={() => setEditandoNota(false)}>Cancelar</button>
+                  {msgNota && (
+                    <p style={{ color: msgNota.includes('✅') ? '#22c55e' : '#ef4444', fontSize: '13px', margin: '0 0 10px' }}>
+                      {msgNota}
+                    </p>
+                  )}
+                  <div style={{ display: 'flex', gap: '10px' }}>
+                    <button style={s.secondaryBtn} onClick={() => { setEditandoNota(false); setMsgNota(''); }}>
+                      Cancelar
+                    </button>
                     <button style={s.primaryBtn} onClick={handleGuardarNota} disabled={guardandoNota}>
                       {guardandoNota ? 'Guardando...' : '💾 Guardar nota'}
                     </button>
@@ -541,7 +575,7 @@ export default function GestionCursos() {
               )}
             </div>
 
-            {/* Criterios de la rúbrica */}
+            {/* Criterios */}
             {entregaDetalle.criterios?.length > 0 && (
               <div style={{ marginBottom: '20px' }}>
                 <h3 style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 12px' }}>
@@ -574,47 +608,50 @@ export default function GestionCursos() {
               </div>
             )}
 
-            {/* ── Trabajo del alumno — PDF o descarga ── */}
+            {/* ── Trabajo del alumno — visor mejorado ── */}
             <div style={s.trabajoBox}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                 <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', margin: 0 }}>
                   📄 Trabajo del alumno
-                  {entregaDetalle.archivoNombre && ` — ${entregaDetalle.archivoNombre}`}
+                  {entregaDetalle.archivoNombre && (
+                    <span style={{ color: '#a78bfa', marginLeft: '8px', textTransform: 'none', letterSpacing: 0 }}>
+                      {entregaDetalle.archivoNombre}
+                    </span>
+                  )}
                 </p>
                 {entregaDetalle.archivoUrl && (
-                  <a href={entregaDetalle.archivoUrl} target="_blank" rel="noreferrer"
-                    style={{ color: '#a78bfa', fontSize: '13px', fontWeight: '600', textDecoration: 'none', padding: '6px 14px', background: 'rgba(167,139,250,0.1)', borderRadius: '8px', border: '1px solid rgba(167,139,250,0.25)' }}>
-                    ↗ Abrir en nueva pestaña
+                  <a
+                    href={entregaDetalle.archivoUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ color: '#22c55e', fontSize: '13px', fontWeight: '600', textDecoration: 'none', background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.3)', padding: '6px 14px', borderRadius: '8px' }}
+                  >
+                    ⬇ Descargar archivo
                   </a>
                 )}
               </div>
 
               {entregaDetalle.archivoUrl ? (
-                esArchivoVisualizablePdf(entregaDetalle.archivoUrl) ? (
-                  /* PDF: mostrar inline con iframe */
+                <div>
+                  {/* Visor embebido via Google Docs — compatible con PDF y DOCX */}
                   <iframe
-                    title="Trabajo del alumno"
-                    src={entregaDetalle.archivoUrl}
-                    style={{ width: '100%', height: '500px', border: 'none', borderRadius: '8px', background: '#fff' }}
+                    key={entregaDetalle.id}
+                    title="Trabajo alumno"
+                    src={getViewerUrl(entregaDetalle.archivoUrl, entregaDetalle.archivoNombre)}
+                    style={{
+                      width: '100%',
+                      height: '500px',
+                      border: 'none',
+                      borderRadius: '10px',
+                      background: '#fff',
+                    }}
+                    allowFullScreen
                   />
-                ) : (
-                  /* Word u otro: botón de descarga */
-                  <div style={{ padding: '24px', textAlign: 'center' }}>
-                    <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '13px', marginBottom: '12px' }}>
-                      Archivo Word — no se puede previsualizar directamente
-                    </p>
-                    <a
-                      href={entregaDetalle.archivoUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      style={{ display: 'inline-block', padding: '12px 24px', borderRadius: '12px', background: 'linear-gradient(135deg, #667eea, #764ba2)', color: '#fff', fontWeight: '600', textDecoration: 'none', fontSize: '14px' }}
-                    >
-                      📥 Descargar {entregaDetalle.archivoNombre || 'archivo'}
-                    </a>
-                  </div>
-                )
+                  <p style={{ color: 'rgba(255,255,255,0.25)', fontSize: '11px', marginTop: '6px', textAlign: 'center' }}>
+                    Si el documento no carga, usa el botón "Descargar archivo" de arriba.
+                  </p>
+                </div>
               ) : entregaDetalle.texto ? (
-                /* Texto plano */
                 <div style={s.textoTrabajo}>
                   {entregaDetalle.texto}
                 </div>
@@ -624,7 +661,7 @@ export default function GestionCursos() {
             </div>
 
             <div style={{ display: 'flex', gap: '12px', marginTop: '20px' }}>
-              <button style={s.secondaryBtn} onClick={() => setEntregaDetalle(null)}>
+              <button style={s.secondaryBtn} onClick={() => { setEntregaDetalle(null); setEditandoNota(false); }}>
                 ← Volver a lista
               </button>
             </div>
@@ -632,7 +669,7 @@ export default function GestionCursos() {
         </div>
       )}
 
-      {/* Modal solicitudes */}
+      {/* ── Modal solicitudes ── */}
       {cursoPendientes && (
         <div style={s.overlay}>
           <div style={s.modal}>
@@ -692,7 +729,7 @@ export default function GestionCursos() {
         </div>
       )}
 
-      {/* Modal actividades */}
+      {/* ── Modal actividades ── */}
       {cursoActividades && (
         <div style={s.overlay}>
           <div style={{ ...s.modal, maxWidth: '720px' }}>
@@ -832,7 +869,7 @@ export default function GestionCursos() {
         </div>
       )}
 
-      {/* Modal nuevo curso */}
+      {/* ── Modal nuevo curso ── */}
       {showForm && (
         <div style={s.overlay}>
           <div style={s.modal}>
@@ -923,7 +960,7 @@ const s = {
   primaryBtn: { padding: '12px 24px', borderRadius: '12px', background: 'linear-gradient(135deg, #667eea, #764ba2)', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: '600', fontSize: '14px' },
   secondaryBtn: { padding: '12px 24px', borderRadius: '12px', background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.7)', border: '1px solid rgba(255,255,255,0.12)', cursor: 'pointer', fontSize: '14px' },
   dangerBtn: { padding: '12px 24px', borderRadius: '12px', background: 'rgba(239,68,68,0.2)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.4)', cursor: 'pointer', fontWeight: '600', fontSize: '14px' },
-  editNotaBtn: { padding: '10px 20px', borderRadius: '10px', background: 'rgba(102,126,234,0.2)', border: '1px solid rgba(102,126,234,0.4)', color: '#a78bfa', cursor: 'pointer', fontWeight: '600', fontSize: '13px' },
+  editarNotaBtn: { padding: '10px 20px', borderRadius: '10px', background: 'rgba(167,139,250,0.15)', border: '1px solid rgba(167,139,250,0.35)', color: '#a78bfa', cursor: 'pointer', fontWeight: '600', fontSize: '14px' },
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '16px' },
   cursoCard: { background: 'rgba(255,255,255,0.04)', borderRadius: '16px', padding: '24px', border: '1px solid rgba(255,255,255,0.08)', display: 'flex', flexDirection: 'column', gap: '10px' },
   cursoTop: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
@@ -977,6 +1014,7 @@ const s = {
   grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' },
   grid3: { display: 'grid', gridTemplateColumns: '1fr 1fr 120px', gap: '16px', marginBottom: '16px' },
   label: { display: 'block', color: 'rgba(255,255,255,0.6)', fontSize: '13px', fontWeight: '500', marginBottom: '8px' },
+  labelSmall: { display: 'block', color: 'rgba(255,255,255,0.5)', fontSize: '12px', fontWeight: '500', marginBottom: '6px' },
   input: { width: '100%', padding: '11px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.06)', color: '#fff', fontSize: '14px', outline: 'none', boxSizing: 'border-box' },
   select: { width: '100%', padding: '11px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(20,16,50,0.95)', color: '#fff', fontSize: '14px', outline: 'none', boxSizing: 'border-box' },
   silaboBox: { background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.15)', borderRadius: '12px', padding: '16px', marginBottom: '20px' },

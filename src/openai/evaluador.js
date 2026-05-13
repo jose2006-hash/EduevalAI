@@ -2,7 +2,7 @@
 
 const OPENAI_API_KEY = import.meta.env.VITE_OPENAI_API_KEY;
 
-// Convierte un File a base64
+// Convierte un File a base64 (sin el prefijo data:...)
 const fileToBase64 = (file) =>
   new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -12,7 +12,7 @@ const fileToBase64 = (file) =>
   });
 
 export const evaluarTrabajo = async (
-  input,          // File (PDF/Word) o string de texto
+  input,           // File object (PDF/DOCX) o string de texto
   rubrica,
   curso,
   tema,
@@ -44,7 +44,17 @@ export const evaluarTrabajo = async (
     ? 'Verifica que el trabajo se alinee con los contenidos del sílabo.'
     : '';
 
-  const jsonSchema = `{
+  const promptBase = `Eres un evaluador académico experto en el curso de "${curso}".
+Evalúa el trabajo sobre "${tema}" usando ESTRICTAMENTE la rúbrica proporcionada.
+${instruccion}
+
+=== RÚBRICA DE EVALUACIÓN ===
+${criteriosTexto}
+Puntaje total máximo: ${rubrica.puntajeTotal || 20} puntos
+${enunciadoSeccion}${silaboSeccion}
+
+Responde ÚNICAMENTE en JSON con esta estructura exacta (sin markdown, sin bloques de código):
+{
   "criterios": [
     {
       "nombre": "nombre del criterio",
@@ -63,73 +73,150 @@ export const evaluarTrabajo = async (
   "recomendaciones": ["recomendación 1", "recomendación 2"]
 }`;
 
-  let messages;
-
+  // ─── Archivo: PDF o DOCX ──────────────────────────────────────────────────
   if (input instanceof File) {
-    // ── Evaluar directamente el archivo (PDF) via base64 ─────────────────
-    const base64Data = await fileToBase64(input);
-    const mediaType = input.type || 'application/pdf';
+    const isPdf = input.type === 'application/pdf' || input.name?.toLowerCase().endsWith('.pdf');
+    const isDocx =
+      input.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+      input.name?.toLowerCase().endsWith('.docx');
 
-    const prompt = `Eres un evaluador académico experto en el curso de "${curso}".
-Evalúa el trabajo sobre "${tema}" usando ESTRICTAMENTE la rúbrica proporcionada.
-${instruccion}
+    if (isPdf) {
+      // ── PDF: subir a Files API y evaluar con gpt-4o ────────────────────
+      const formData = new FormData();
+      formData.append('file', input, input.name);
+      formData.append('purpose', 'assistants');
 
-Lee el documento adjunto (archivo del alumno) y evalúalo según esta rúbrica:
+      const uploadRes = await fetch('https://api.openai.com/v1/files', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
+        body: formData,
+      });
+      const uploadData = await uploadRes.json();
+      if (!uploadData.id) throw new Error('No se pudo subir el PDF: ' + JSON.stringify(uploadData));
+      const fileId = uploadData.id;
 
-=== RÚBRICA DE EVALUACIÓN ===
-${criteriosTexto}
-Puntaje total máximo: ${rubrica.puntajeTotal || 20} puntos
-${enunciadoSeccion}${silaboSeccion}
-
-Responde ÚNICAMENTE en JSON con esta estructura exacta (sin texto adicional, sin markdown):
-${jsonSchema}`;
-
-    messages = [
-      {
-        role: 'system',
-        content:
-          'Eres un evaluador académico justo y detallado. Siempre respondes ÚNICAMENTE en JSON válido, sin ningún texto adicional ni backticks.',
-      },
-      {
-        role: 'user',
-        content: [
-          { type: 'text', text: prompt },
-          {
-            type: 'image_url',
-            image_url: {
-              url: `data:${mediaType};base64,${base64Data}`,
-              detail: 'high',
-            },
+      let resultData;
+      try {
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${OPENAI_API_KEY}`,
           },
-        ],
-      },
-    ];
-  } else {
-    // ── Evaluar texto plano ───────────────────────────────────────────────
-    const prompt = `Eres un evaluador académico experto en el curso de "${curso}".
-Evalúa el trabajo sobre "${tema}" usando ESTRICTAMENTE la rúbrica proporcionada.
-${instruccion}
+          body: JSON.stringify({
+            model: 'gpt-4o',
+            messages: [
+              {
+                role: 'system',
+                content:
+                  'Eres un evaluador académico justo y detallado. Siempre respondes en JSON válido sin markdown ni bloques de código.',
+              },
+              {
+                role: 'user',
+                content: [
+                  {
+                    type: 'text',
+                    text:
+                      promptBase +
+                      '\n\nEl trabajo del alumno está en el archivo PDF adjunto. Léelo y evalúalo.',
+                  },
+                  {
+                    type: 'file',
+                    file: { file_id: fileId },
+                  },
+                ],
+              },
+            ],
+            temperature: 0.3,
+            response_format: { type: 'json_object' },
+            max_tokens: 2000,
+          }),
+        });
+        resultData = await response.json();
+      } finally {
+        // Siempre limpiar el archivo subido
+        fetch(`https://api.openai.com/v1/files/${fileId}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
+        }).catch(() => {});
+      }
 
-=== RÚBRICA DE EVALUACIÓN ===
-${criteriosTexto}
-Puntaje total máximo: ${rubrica.puntajeTotal || 20} puntos
-${enunciadoSeccion}${silaboSeccion}
-=== TRABAJO DEL ALUMNO ===
-${input}
+      const content = resultData.choices?.[0]?.message?.content;
+      if (!content) throw new Error(resultData.error?.message || 'Sin respuesta de OpenAI');
+      const clean = content.replace(/```json|```/g, '').trim();
+      return JSON.parse(clean);
 
-Responde ÚNICAMENTE en JSON con esta estructura exacta (sin texto adicional, sin markdown):
-${jsonSchema}`;
+    } else if (isDocx) {
+      // ── DOCX: subir a Files API y evaluar con gpt-4o ──────────────────
+      const formData = new FormData();
+      formData.append('file', input, input.name);
+      formData.append('purpose', 'assistants');
 
-    messages = [
-      {
-        role: 'system',
-        content:
-          'Eres un evaluador académico justo y detallado. Siempre respondes ÚNICAMENTE en JSON válido, sin ningún texto adicional ni backticks.',
-      },
-      { role: 'user', content: prompt },
-    ];
+      const uploadRes = await fetch('https://api.openai.com/v1/files', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
+        body: formData,
+      });
+      const uploadData = await uploadRes.json();
+      if (!uploadData.id) throw new Error('No se pudo subir el archivo Word: ' + JSON.stringify(uploadData));
+      const fileId = uploadData.id;
+
+      let resultData;
+      try {
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${OPENAI_API_KEY}`,
+          },
+          body: JSON.stringify({
+            model: 'gpt-4o',
+            messages: [
+              {
+                role: 'system',
+                content:
+                  'Eres un evaluador académico justo y detallado. Siempre respondes en JSON válido sin markdown ni bloques de código.',
+              },
+              {
+                role: 'user',
+                content: [
+                  {
+                    type: 'text',
+                    text:
+                      promptBase +
+                      '\n\nEl trabajo del alumno está en el archivo Word (.docx) adjunto. Léelo y evalúalo.',
+                  },
+                  {
+                    type: 'file',
+                    file: { file_id: fileId },
+                  },
+                ],
+              },
+            ],
+            temperature: 0.3,
+            response_format: { type: 'json_object' },
+            max_tokens: 2000,
+          }),
+        });
+        resultData = await response.json();
+      } finally {
+        fetch(`https://api.openai.com/v1/files/${fileId}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
+        }).catch(() => {});
+      }
+
+      const content = resultData.choices?.[0]?.message?.content;
+      if (!content) throw new Error(resultData.error?.message || 'Sin respuesta de OpenAI');
+      const clean = content.replace(/```json|```/g, '').trim();
+      return JSON.parse(clean);
+
+    } else {
+      throw new Error(`Tipo de archivo no soportado: ${input.type || input.name}`);
+    }
   }
 
+  // ─── Texto plano ───────────────────────────────────────────────────────────
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -138,20 +225,26 @@ ${jsonSchema}`;
     },
     body: JSON.stringify({
       model: 'gpt-4o',
-      messages,
+      messages: [
+        {
+          role: 'system',
+          content:
+            'Eres un evaluador académico justo y detallado. Siempre respondes en JSON válido sin markdown ni bloques de código.',
+        },
+        {
+          role: 'user',
+          content: promptBase + `\n\n=== TRABAJO DEL ALUMNO ===\n${input}`,
+        },
+      ],
       temperature: 0.3,
       response_format: { type: 'json_object' },
       max_tokens: 2000,
     }),
   });
 
-  if (!response.ok) {
-    const errData = await response.json().catch(() => ({}));
-    throw new Error(errData?.error?.message || `OpenAI error ${response.status}`);
-  }
-
   const data = await response.json();
-  const content = data.choices[0].message.content;
+  const content = data.choices?.[0]?.message?.content;
+  if (!content) throw new Error(data.error?.message || 'Sin respuesta de OpenAI');
   const clean = content.replace(/```json|```/g, '').trim();
   return JSON.parse(clean);
 };
