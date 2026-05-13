@@ -47,7 +47,6 @@ export default function CursoAlumno() {
   const [enviando, setEnviando] = useState(false);
   const [error, setError] = useState('');
   const [msg, setMsg] = useState('');
-  const [tabActivo, setTabActivo] = useState('archivo');
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState('');
 
   useEffect(() => { cargar(); }, [cursoId, user]);
@@ -89,7 +88,6 @@ export default function CursoAlumno() {
     }
     setError('');
     setArchivo(file);
-    setTabActivo('archivo');
     try {
       if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl);
       // Solo generamos preview para PDF
@@ -107,11 +105,7 @@ export default function CursoAlumno() {
   const handleFileInput = async (e) => { await procesarArchivo(e.target.files[0]); };
 
   const handleEnviar = async () => {
-    const usandoArchivo = tabActivo === 'archivo';
-    const usandoTexto = tabActivo === 'texto';
-
-    if (usandoArchivo && !archivo) return setError('Sube un PDF o archivo Word');
-    if (usandoTexto && !form.texto?.trim()) return setError('Escribe el contenido de tu trabajo');
+    if (!archivo && !editEntrega?.archivoUrl) return setError('Sube un PDF o archivo Word');
     if (!form.tipoEvaluacion) return setError('Selecciona el tipo de evaluación');
     if (!form.titulo.trim()) return setError('Ingresa un título para tu trabajo');
 
@@ -138,17 +132,19 @@ export default function CursoAlumno() {
       let resultado = null;
 
       if (rubrica) {
-        // Evaluar con el archivo directo (sin extraer texto)
-        const inputEvaluacion = usandoArchivo && archivo ? archivo : form.texto;
+        const inputEvaluacion = archivo;
         resultado = await evaluarTrabajo(
           inputEvaluacion, rubrica, curso.nombre, form.titulo,
           curso.silaboTexto || '', enunciadoTexto
         );
       }
 
-      // Subir archivo a Storage
+      // Subir archivo a Storage (solo si hay archivo nuevo)
       const timestamp = Date.now();
-      const archivoData = await subirPdfEntrega(archivo, user.uid, cursoId, timestamp);
+      let archivoData = { archivoNombre: editEntrega?.archivoNombre || null, archivoUrl: editEntrega?.archivoUrl || null };
+      if (archivo) {
+        archivoData = await subirPdfEntrega(archivo, user.uid, cursoId, timestamp);
+      }
 
       const datosEntrega = {
         alumnoUid: user.uid, alumnoNombre: userData.nombre,
@@ -157,7 +153,7 @@ export default function CursoAlumno() {
         actividadId: form.actividadId || null,
         actividadTitulo: actividadSeleccionada?.titulo || null,
         titulo: form.titulo,
-        texto: usandoTexto ? form.texto : '',
+        texto: '',
         archivoNombre: archivoData?.archivoNombre || archivo?.name || null,
         archivoUrl: archivoData?.archivoUrl || null,
         rubricaId: rubrica?.id || null,
@@ -184,7 +180,7 @@ export default function CursoAlumno() {
   const resetForm = () => {
     setForm({ tipoEvaluacion: '', actividadId: '', titulo: '', texto: '', rubricaId: '' });
     setActividadSeleccionada(null);
-    setArchivo(null); setError(''); setTabActivo('archivo');
+    setArchivo(null); setError('');
     try { if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl); } catch { /* ignore */ }
     setPdfPreviewUrl('');
   };
@@ -208,7 +204,6 @@ export default function CursoAlumno() {
     const act = e.actividadId ? actividades.find(a => a.id === e.actividadId) : null;
     setActividadSeleccionada(act || null);
     setArchivo(null);
-    setTabActivo(e.archivoUrl ? 'archivo' : 'texto');
     setPdfPreviewUrl(e.archivoUrl || '');
   };
 
