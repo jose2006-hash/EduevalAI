@@ -151,8 +151,12 @@ export default function CursoAlumno() {
       const enunciadoTexto = actividadSeleccionada?.enunciadoTexto || '';
       let resultado = null;
       if (rubrica) {
+        let inputEvaluacion = textoFinal;
+        if (tabActivo === 'pdf' && archivo) {
+          inputEvaluacion = archivo;
+        }
         resultado = await evaluarTrabajo(
-          textoFinal, rubrica, curso.nombre, form.titulo,
+          inputEvaluacion, rubrica, curso.nombre, form.titulo,
           curso.silaboTexto || '', enunciadoTexto
         );
       }

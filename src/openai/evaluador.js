@@ -1,15 +1,19 @@
 // src/openai/evaluador.js
 
+// src/openai/evaluador.js
+
+import OpenAI from 'openai';
+
 const OPENAI_API_KEY = import.meta.env.VITE_OPENAI_API_KEY;
+const openai = new OpenAI({ apiKey: OPENAI_API_KEY, dangerouslyAllowBrowser: true });
 
 export const evaluarTrabajo = async (
-  trabajoTexto,
+  input,  // File object del PDF o string de texto
   rubrica,
   curso,
   tema,
   silaboTexto = '',
-  enunciadoTexto = '',
-  pdfImagenes = []   // base64[] — páginas del PDF como imágenes JPEG
+  enunciadoTexto = ''
 ) => {
   const criteriosTexto = rubrica.criterios.map((c, i) =>
     `${i + 1}. ${c.nombre} (peso: ${c.peso}%): ${c.descripcion}
@@ -33,18 +37,25 @@ export const evaluarTrabajo = async (
     ? 'Verifica que el trabajo se alinee con los contenidos del sílabo.'
     : '';
 
-  const usarVision = pdfImagenes.length > 0;
+  let messages;
 
-  const prompt = `Eres un evaluador académico experto en el curso de "${curso}".
+  if (input instanceof File) {
+    // Subir el PDF a OpenAI
+    const uploadedFile = await openai.files.create({
+      file: input,
+      purpose: 'assistants',
+    });
+
+    const prompt = `Eres un evaluador académico experto en el curso de "${curso}".
 Evalúa el trabajo sobre "${tema}" usando ESTRICTAMENTE la rúbrica proporcionada.
 ${instruccion}
-${usarVision ? 'El trabajo del alumno se presenta como imágenes del PDF original. Analiza cada página visualmente.' : ''}
+
+Analiza el contenido del PDF adjunto según la siguiente rúbrica:
 
 === RÚBRICA DE EVALUACIÓN ===
 ${criteriosTexto}
 Puntaje total máximo: ${rubrica.puntajeTotal || 20} puntos
 ${enunciadoSeccion}${silaboSeccion}
-${!usarVision ? `=== TRABAJO DEL ALUMNO ===\n${trabajoTexto}` : ''}
 
 Responde ÚNICAMENTE en JSON con esta estructura exacta:
 {
@@ -66,56 +77,81 @@ Responde ÚNICAMENTE en JSON con esta estructura exacta:
   "recomendaciones": ["recomendación 1", "recomendación 2"]
 }`;
 
-  // Contenido del mensaje — vision si hay imágenes, texto si no
-  let userContent;
-  if (usarVision) {
-    userContent = [
-      { type: 'text', text: prompt },
-      ...pdfImagenes.map(img => ({
-        type: 'image_url',
-        image_url: {
-          url: `data:image/jpeg;base64,${img}`,
-          detail: 'high',
-        },
-      })),
+    messages = [
+      {
+        role: 'system',
+        content: 'Eres un evaluador académico justo y detallado. Siempre respondes en JSON válido.',
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'file', file: { file_id: uploadedFile.id } },
+          { type: 'text', text: prompt }
+        ]
+      }
     ];
+
+    // Después de la evaluación, eliminar el file
+    // Lo haremos después de obtener la respuesta
   } else {
-    userContent = prompt;
+    // Evaluar texto (para compatibilidad)
+    const prompt = `Eres un evaluador académico experto en el curso de "${curso}".
+Evalúa el trabajo sobre "${tema}" usando ESTRICTAMENTE la rúbrica proporcionada.
+${instruccion}
+
+=== RÚBRICA DE EVALUACIÓN ===
+${criteriosTexto}
+Puntaje total máximo: ${rubrica.puntajeTotal || 20} puntos
+${enunciadoSeccion}${silaboSeccion}
+=== TRABAJO DEL ALUMNO ===
+${input}
+
+Responde ÚNICAMENTE en JSON con esta estructura exacta:
+{
+  "criterios": [
+    {
+      "nombre": "nombre del criterio",
+      "puntajeObtenido": número,
+      "puntajeMaximo": número,
+      "nivel": "Excelente|Bueno|Regular|Insuficiente",
+      "comentario": "comentario de 1-2 oraciones"
+    }
+  ],
+  "notaFinal": número entre 0 y 20,
+  "porcentaje": número entre 0 y 100,
+  "nivelGlobal": "Excelente|Bueno|Regular|Insuficiente",
+  "fortalezas": ["fortaleza 1", "fortaleza 2"],
+  "areasDesMejora": ["área 1", "área 2"],
+  "retroalimentacionGeneral": "párrafo de 3-4 oraciones",
+  "recomendaciones": ["recomendación 1", "recomendación 2"]
+}`;
+
+    messages = [
+      {
+        role: 'system',
+        content: 'Eres un evaluador académico justo y detallado. Siempre respondes en JSON válido.',
+      },
+      { role: 'user', content: prompt }
+    ];
   }
 
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${OPENAI_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: 'gpt-4o',
-      messages: [
-        {
-          role: 'system',
-          content: 'Eres un evaluador académico justo y detallado. Siempre respondes en JSON válido.',
-        },
-        { role: 'user', content: userContent },
-      ],
-      temperature: 0.3,
-      // response_format solo funciona con contenido texto puro, no con vision
-      ...(usarVision ? {} : { response_format: { type: 'json_object' } }),
-    }),
+  const response = await openai.chat.completions.create({
+    model: 'gpt-4o',
+    messages,
+    temperature: 0.3,
+    response_format: { type: 'json_object' },
   });
 
-  if (!response.ok) {
-    const err = await response.json();
-    throw new Error(err.error?.message || 'Error al conectar con OpenAI');
+  // Si se subió un file, eliminarlo
+  if (input instanceof File) {
+    const uploadedFileId = messages[1].content.find(c => c.type === 'file')?.file?.file_id;
+    if (uploadedFileId) {
+      await openai.files.del(uploadedFileId);
+    }
   }
 
-  const data = await response.json();
-  const raw = data.choices[0].message.content;
-
-  // Extraer JSON aunque venga envuelto en ```json ... ```
-  const jsonMatch = raw.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error('La IA no devolvió JSON válido');
-  return JSON.parse(jsonMatch[0]);
+  const content = response.choices[0].message.content;
+  return JSON.parse(content);
 };
 
 export const generarReporteClase = async (evaluaciones, cursoNombre) => {
