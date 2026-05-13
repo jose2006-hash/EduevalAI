@@ -472,81 +472,54 @@ export default function CursoAlumno() {
               </div>
             </div>
 
-            {/* Tabs */}
-            <div style={s.tabs}>
-              <button style={{ ...s.tab, ...(tabActivo === 'archivo' ? s.tabActivo : {}) }} onClick={() => setTabActivo('archivo')}>
-                📄 Subir archivo (PDF o Word)
-              </button>
-              <button style={{ ...s.tab, ...(tabActivo === 'texto' ? s.tabActivo : {}) }} onClick={() => setTabActivo('texto')}>
-                ✏️ Escribir texto
-              </button>
+            {/* Zona de subida de archivo */}
+            <div ref={dropRef}
+              style={{ ...s.dropZone, ...(dragging ? s.dropZoneActive : {}), ...(archivo ? s.dropZoneDone : {}) }}
+              onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+              {archivo ? (
+                <div style={s.dropContent}>
+                  <span style={{ fontSize: '40px' }}>{esArchivoWord(archivo) ? '📝' : '✅'}</span>
+                  <p style={{ ...s.dropText, color: '#22c55e' }}>{archivo.name}</p>
+                  <p style={s.dropHint}>
+                    {esArchivoWord(archivo) ? 'Archivo Word listo para evaluar' : 'PDF listo para evaluar'}
+                  </p>
+                  <button style={s.clearBtn} onClick={() => { setArchivo(null); setPdfPreviewUrl(''); }}>
+                    Quitar archivo
+                  </button>
+                </div>
+              ) : (
+                <div style={s.dropContent}>
+                  <span style={{ fontSize: '48px' }}>{dragging ? '📂' : '📄'}</span>
+                  <p style={s.dropText}>{dragging ? 'Suelta el archivo aquí' : 'Arrastra tu archivo aquí'}</p>
+                  <p style={s.dropHint}>PDF o Word (.docx) · o haz clic para seleccionar</p>
+                  <label style={s.selectFileBtn}>
+                    Seleccionar archivo
+                    <input type="file" accept={TIPOS_ACEPTADOS} style={{ display: 'none' }} onChange={handleFileInput} />
+                  </label>
+                </div>
+              )}
             </div>
 
-            {/* Zona de subida de archivo */}
-            {tabActivo === 'archivo' && (
-              <div ref={dropRef}
-                style={{ ...s.dropZone, ...(dragging ? s.dropZoneActive : {}), ...(archivo ? s.dropZoneDone : {}) }}
-                onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
-                {archivo ? (
-                  <div style={s.dropContent}>
-                    <span style={{ fontSize: '40px' }}>{esArchivoWord(archivo) ? '📝' : '✅'}</span>
-                    <p style={{ ...s.dropText, color: '#22c55e' }}>{archivo.name}</p>
-                    <p style={s.dropHint}>
-                      {esArchivoWord(archivo) ? 'Archivo Word listo para evaluar' : 'PDF listo para evaluar'}
-                    </p>
-                    <button style={s.clearBtn} onClick={() => { setArchivo(null); setPdfPreviewUrl(''); }}>
-                      Quitar archivo
-                    </button>
-                  </div>
-                ) : (
-                  <div style={s.dropContent}>
-                    <span style={{ fontSize: '48px' }}>{dragging ? '📂' : '📄'}</span>
-                    <p style={s.dropText}>{dragging ? 'Suelta el archivo aquí' : 'Arrastra tu archivo aquí'}</p>
-                    <p style={s.dropHint}>PDF o Word (.docx) · o haz clic para seleccionar</p>
-                    <label style={s.selectFileBtn}>
-                      Seleccionar archivo
-                      <input type="file" accept={TIPOS_ACEPTADOS} style={{ display: 'none' }} onChange={handleFileInput} />
-                    </label>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Preview solo para PDF */}
-            {tabActivo === 'archivo' && pdfPreviewUrl && archivo && !esArchivoWord(archivo) && (
+            {/* Preview PDF local (antes de subir) */}
+            {pdfPreviewUrl && archivo && !esArchivoWord(archivo) && (
               <div style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', overflow: 'hidden', marginBottom: '16px' }}>
                 <p style={{ padding: '8px 12px', background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.5)', fontSize: '12px', margin: 0 }}>
                   Vista previa del PDF
                 </p>
-                <iframe title="Vista previa" src={pdfPreviewUrl} style={{ width: '100%', height: '320px', border: 'none', background: '#0f0c29' }} />
+                <iframe title="Vista previa" src={pdfPreviewUrl} style={{ width: '100%', height: '320px', border: 'none', background: '#fff' }} />
               </div>
             )}
 
-            {/* Preview para Word */}
-            {tabActivo === 'archivo' && archivo && esArchivoWord(archivo) && (
-              <div style={{ background: 'rgba(102,126,234,0.08)', border: '1px solid rgba(102,126,234,0.2)', borderRadius: '12px', padding: '14px 16px', marginBottom: '16px' }}>
-                <p style={{ color: '#a78bfa', fontSize: '13px', margin: 0 }}>
-                  📝 Archivo Word seleccionado: <strong>{archivo.name}</strong> — será evaluado directamente por la IA.
-                </p>
-              </div>
-            )}
-
-            {/* Si estaba editando y tenía un archivo previo */}
-            {tabActivo === 'archivo' && !archivo && editEntrega?.archivoUrl && (
+            {/* Si editando y hay archivo previo guardado */}
+            {!archivo && editEntrega?.archivoUrl && (
               <div style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', padding: '14px 16px', marginBottom: '16px' }}>
-                <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '13px', margin: '0 0 8px' }}>
-                  Archivo anterior: <strong style={{ color: '#fff' }}>{editEntrega.archivoNombre}</strong>
+                <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '13px', margin: '0 0 4px' }}>
+                  Archivo actual: <strong style={{ color: '#fff' }}>{editEntrega.archivoNombre}</strong>
                 </p>
-                <p style={{ color: 'rgba(255,255,255,0.35)', fontSize: '12px', margin: 0 }}>
-                  Sube un nuevo archivo para reemplazarlo, o déjalo así para mantener el actual.
+                <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px', margin: 0 }}>
+                  Sube un nuevo archivo para reemplazarlo, o deja vacío para mantener el actual.
                 </p>
               </div>
-            )}
-
-            {tabActivo === 'texto' && (
-              <textarea style={s.textarea}
-                placeholder="Escribe o pega el contenido de tu trabajo aquí..."
-                value={form.texto} onChange={e => setForm(f => ({ ...f, texto: e.target.value }))} rows={12} />
             )}
 
             {error && <p style={s.error}>{error}</p>}
