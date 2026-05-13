@@ -600,71 +600,64 @@ export default function GestionCursos() {
 
             {/* ── Trabajo del alumno — visor ── */}
             <div style={s.trabajoBox}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <div style={{ marginBottom: '12px' }}>
                 <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', margin: 0 }}>
-                  📄 Trabajo del alumno
-                  {entregaDetalle.archivoNombre && (
-                    <span style={{ color: '#a78bfa', marginLeft: '8px', textTransform: 'none', letterSpacing: 0 }}>
-                      {entregaDetalle.archivoNombre}
-                    </span>
-                  )}
+                  📄 Trabajo entregado
                 </p>
-                {entregaDetalle.archivoUrl && (
-                  <a
-                    href={entregaDetalle.archivoUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    style={{ color: '#22c55e', fontSize: '13px', fontWeight: '600', textDecoration: 'none', background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.3)', padding: '6px 14px', borderRadius: '8px' }}
-                  >
-                    ⬇ Descargar / Abrir archivo
-                  </a>
-                )}
               </div>
 
               {entregaDetalle.archivoUrl ? (
-                esDocxArchivo(entregaDetalle.archivoNombre) ? (
-                  /* DOCX → Google Docs viewer (única opción para Word) */
-                  <div>
-                    <iframe
-                      key={entregaDetalle.id}
-                      title="Trabajo alumno"
-                      src={`https://docs.google.com/gview?url=${encodeURIComponent(entregaDetalle.archivoUrl)}&embedded=true`}
-                      style={{ width: '100%', height: '520px', border: 'none', borderRadius: '10px', background: '#fff' }}
-                      allowFullScreen
-                    />
-                    <p style={{ color: 'rgba(255,255,255,0.25)', fontSize: '11px', marginTop: '6px', textAlign: 'center' }}>
-                      Si el documento Word no carga, usa el botón "Descargar / Abrir archivo".
-                    </p>
+                <div style={{ textAlign: 'center', padding: '32px 20px' }}>
+                  {/* Ícono según tipo */}
+                  <div style={{ fontSize: '56px', marginBottom: '12px' }}>
+                    {esDocxArchivo(entregaDetalle.archivoNombre) ? '📝' : '📄'}
                   </div>
-                ) : (
-                  /* PDF → object tag con el URL directo de Firebase (sin proxy) */
-                  <div>
-                    <object
-                      key={entregaDetalle.id}
-                      data={entregaDetalle.archivoUrl}
-                      type="application/pdf"
-                      style={{ width: '100%', height: '560px', borderRadius: '10px', border: 'none', background: '#fff' }}
+                  <p style={{ color: '#fff', fontSize: '16px', fontWeight: '600', margin: '0 0 6px' }}>
+                    {entregaDetalle.archivoNombre}
+                  </p>
+                  <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '13px', margin: '0 0 24px' }}>
+                    {esDocxArchivo(entregaDetalle.archivoNombre) ? 'Documento Word' : 'Documento PDF'}
+                  </p>
+                  <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                    <a
+                      href={entregaDetalle.archivoUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{
+                        display: 'inline-block',
+                        padding: '12px 28px',
+                        borderRadius: '12px',
+                        background: 'linear-gradient(135deg, #667eea, #764ba2)',
+                        color: '#fff',
+                        fontWeight: '700',
+                        fontSize: '15px',
+                        textDecoration: 'none',
+                      }}
                     >
-                      {/* Fallback si el browser no soporta object */}
-                      <div style={{ padding: '24px', textAlign: 'center' }}>
-                        <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '14px', marginBottom: '12px' }}>
-                          Tu navegador no puede mostrar el PDF aquí directamente.
-                        </p>
-                        <a
-                          href={entregaDetalle.archivoUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{ color: '#a78bfa', fontWeight: '600', fontSize: '14px' }}
-                        >
-                          📄 Abrir PDF en nueva pestaña →
-                        </a>
-                      </div>
-                    </object>
-                    <p style={{ color: 'rgba(255,255,255,0.25)', fontSize: '11px', marginTop: '6px', textAlign: 'center' }}>
-                      Si el PDF no aparece, usa el botón "Descargar / Abrir archivo" de arriba.
-                    </p>
+                      📂 Abrir archivo en nueva pestaña
+                    </a>
+                    <a
+                      href={entregaDetalle.archivoUrl}
+                      download={entregaDetalle.archivoNombre}
+                      style={{
+                        display: 'inline-block',
+                        padding: '12px 28px',
+                        borderRadius: '12px',
+                        background: 'rgba(34,197,94,0.15)',
+                        border: '1px solid rgba(34,197,94,0.35)',
+                        color: '#22c55e',
+                        fontWeight: '600',
+                        fontSize: '15px',
+                        textDecoration: 'none',
+                      }}
+                    >
+                      ⬇ Descargar
+                    </a>
                   </div>
-                )
+                  <p style={{ color: 'rgba(255,255,255,0.2)', fontSize: '11px', marginTop: '20px' }}>
+                    Para ver el PDF embebido, configura CORS en Firebase Storage.
+                  </p>
+                </div>
               ) : entregaDetalle.texto ? (
                 <div style={s.textoTrabajo}>
                   {entregaDetalle.texto}
