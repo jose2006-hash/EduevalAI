@@ -5,43 +5,52 @@ import {
   getCurso, getEntregasByAlumnoYCurso, crearEntrega, eliminarEntrega,
   actualizarEntregaAlumno,
   calcularNotaFinal, getRubricas, getActividadesByCurso,
-  getMatriculasByAlumno, eliminarMatricula, subirPdfEntrega,
+  getMatriculasByAlumno, eliminarMatricula,
 } from '../firebase/services.js';
 import { evaluarTrabajo } from '../openai/evaluador.js';
 import { useAuth } from '../components/AuthContext.jsx';
 
-// ── PDF text extraction con pdfjs-dist ────────────────────────────────────
-const extractPdfText = async (file) => {
-  try {
-    const pdfjsLib = await import('pdfjs-dist');
-    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
-    const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-    let fullText = '';
-    for (let i = 1; i <= Math.min(pdf.numPages, 20); i++) {
-      const page = await pdf.getPage(i);
-      const content = await page.getTextContent();
-      const pageText = content.items.map(item => item.str).join(' ');
-      fullText += pageText + '\n';
-    }
-    return fullText.substring(0, 8000).trim();
-  } catch {
-    // Fallback a latin1 si pdfjs falla
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        const text = ev.target.result
-          .replace(/[^\x20-\x7E\xA0-\xFF\n]/g, ' ')
-          .replace(/\s{3,}/g, '\n')
-          .substring(0, 8000);
-        resolve(text);
-      };
-      reader.readAsText(file, 'latin1');
-    });
-  }
-};
-
 const MAX_ENTREGAS_POR_ACTIVIDAD = 2;
+const MAX_PAGINAS_VISION = 5; // páginas que se mandan a la IA
+const SCALE_IMAGEN = 1.0;     // resolución de cada página
+const JPEG_QUALITY = 0.75;    // calidad JPEG (0-1)
+
+// ── Extrae texto e imágenes de un PDF usando pdfjs-dist ───────────────────
+const procesarPDF = async (file) => {
+  const pdfjsLib = await import('pdfjs-dist');
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const numPaginas = pdf.numPages;
+
+  let texto = '';
+  const imagenes = []; // base64 JPEG
+
+  for (let i = 1; i <= Math.min(numPaginas, MAX_PAGINAS_VISION); i++) {
+    const page = await pdf.getPage(i);
+
+    // Texto
+    const content = await page.getTextContent();
+    const pageText = content.items.map(item => item.str).join(' ');
+    texto += pageText + '\n';
+
+    // Imagen (para Vision API)
+    const viewport = page.getViewport({ scale: SCALE_IMAGEN });
+    const canvas = document.createElement('canvas');
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    const ctx = canvas.getContext('2d');
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    const base64 = canvas.toDataURL('image/jpeg', JPEG_QUALITY).split(',')[1];
+    imagenes.push(base64);
+  }
+
+  texto = texto.replace(/\s{3,}/g, '\n').trim().substring(0, 8000);
+
+  return { texto, imagenes, numPaginas };
+};
 
 export default function CursoAlumno() {
   const { cursoId } = useParams();
@@ -66,6 +75,7 @@ export default function CursoAlumno() {
   const [actividadSeleccionada, setActividadSeleccionada] = useState(null);
   const [archivo, setArchivo] = useState(null);
   const [archivoTexto, setArchivoTexto] = useState('');
+  const [archivoImagenes, setArchivoImagenes] = useState([]); // base64 pages
   const [leyendo, setLeyendo] = useState(false);
   const [enviando, setEnviando] = useState(false);
   const [error, setError] = useState('');
@@ -86,7 +96,6 @@ export default function CursoAlumno() {
     setLoading(false);
   };
 
-  // Cuántas veces subió el alumno una actividad específica
   const contarEntregasActividad = (actividadId) =>
     entregas.filter(e => e.actividadId === actividadId).length;
 
@@ -102,79 +111,105 @@ export default function CursoAlumno() {
   const handleActividadChange = (id) => {
     const act = actividades.find(a => a.id === id);
     setActividadSeleccionada(act || null);
-    setForm(f => ({ ...f, actividadId: id, titulo: act ? act.titulo : '', rubricaId: act?.rubricaId || f.rubricaId }));
+    setForm(f => ({
+      ...f, actividadId: id,
+      titulo: act ? act.titulo : '',
+      rubricaId: act?.rubricaId || f.rubricaId,
+    }));
   };
 
+  // ── Procesar archivo subido ──────────────────────────────────────────────
   const procesarArchivo = async (file) => {
     if (!file) return;
-    if (file.type !== 'application/pdf') { setError('Solo se aceptan archivos PDF'); return; }
+    const esPDF = file.type === 'application/pdf';
+    const esWord = file.name.endsWith('.docx') || file.name.endsWith('.doc');
+    if (!esPDF && !esWord) { setError('Solo se aceptan archivos PDF o Word (.docx)'); return; }
+
     setLeyendo(true); setError('');
-    const texto = await extractPdfText(file);
-    setArchivo(file); setArchivoTexto(texto); setTabActivo('pdf');
+    setArchivoImagenes([]);
+
     try {
-      if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl);
-      setPdfPreviewUrl(URL.createObjectURL(file));
-    } catch { /* ignore */ }
-    setLeyendo(false);
+      if (esPDF) {
+        const { texto, imagenes } = await procesarPDF(file);
+        setArchivoTexto(texto);
+        setArchivoImagenes(imagenes);
+      } else {
+        // Word: solo leer como texto (fallback)
+        const text = await file.text().catch(() => '');
+        setArchivoTexto(text.substring(0, 8000));
+      }
+
+      setArchivo(file);
+      setTabActivo('pdf');
+      try {
+        if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl);
+        if (esPDF) setPdfPreviewUrl(URL.createObjectURL(file));
+      } catch { /* ignore */ }
+    } catch (err) {
+      setError('Error al leer el archivo: ' + err.message);
+    } finally {
+      setLeyendo(false);
+    }
   };
 
   const handleDragOver = (e) => { e.preventDefault(); setDragging(true); };
   const handleDragLeave = () => setDragging(false);
-  const handleDrop = async (e) => { e.preventDefault(); setDragging(false); await procesarArchivo(e.dataTransfer.files[0]); };
+  const handleDrop = async (e) => {
+    e.preventDefault(); setDragging(false);
+    await procesarArchivo(e.dataTransfer.files[0]);
+  };
   const handleFileInput = async (e) => { await procesarArchivo(e.target.files[0]); };
 
+  // ── Enviar y evaluar ─────────────────────────────────────────────────────
   const handleEnviar = async () => {
     const textoFinal = tabActivo === 'pdf' ? archivoTexto : form.texto;
-    if (!textoFinal?.trim()) return setError('Sube un PDF o escribe el contenido de tu trabajo');
+    const hayContenido = (textoFinal?.trim().length > 20) || archivoImagenes.length > 0;
+    if (!hayContenido) return setError('Sube un archivo o escribe el contenido de tu trabajo');
     if (!form.tipoEvaluacion) return setError('Selecciona el tipo de evaluación');
     if (!form.titulo.trim()) return setError('Ingresa un título para tu trabajo');
 
-    // Verificar fecha límite
     if (actividadSeleccionada?.fechaLimite) {
       const limite = new Date(actividadSeleccionada.fechaLimite);
-      if (!Number.isNaN(limite.getTime()) && new Date() > limite) {
+      if (!Number.isNaN(limite.getTime()) && new Date() > limite)
         return setError('⏰ La fecha límite de esta actividad ya venció');
-      }
     }
 
-    // Verificar límite de 2 entregas por actividad (solo para nuevas, no ediciones)
     if (!editEntrega && form.actividadId) {
-      const count = contarEntregasActividad(form.actividadId);
-      if (count >= MAX_ENTREGAS_POR_ACTIVIDAD) {
-        return setError(`Solo puedes subir un máximo de ${MAX_ENTREGAS_POR_ACTIVIDAD} trabajos por actividad`);
-      }
+      if (contarEntregasActividad(form.actividadId) >= MAX_ENTREGAS_POR_ACTIVIDAD)
+        return setError(`Límite de ${MAX_ENTREGAS_POR_ACTIVIDAD} entregas por actividad alcanzado`);
     }
 
     setError(''); setEnviando(true); setMsg('');
     try {
       const rubrica = rubricas.find(r => r.id === form.rubricaId) || rubricas[0];
       const enunciadoTexto = actividadSeleccionada?.enunciadoTexto || '';
+
       let resultado = null;
       if (rubrica) {
-        let inputEvaluacion = textoFinal;
-        if (tabActivo === 'pdf' && archivo) {
-          inputEvaluacion = archivo;
-        }
         resultado = await evaluarTrabajo(
-          inputEvaluacion, rubrica, curso.nombre, form.titulo,
-          curso.silaboTexto || '', enunciadoTexto
+          textoFinal || '',
+          rubrica,
+          curso.nombre,
+          form.titulo,
+          curso.silaboTexto || '',
+          enunciadoTexto,
+          archivoImagenes   // ← imágenes del PDF para Vision
         );
       }
 
-      // Subir PDF a Storage
-      const timestamp = Date.now();
-      const archivoData = await subirPdfEntrega(archivo, user.uid, cursoId, timestamp);
-
       const datosEntrega = {
-        alumnoUid: user.uid, alumnoNombre: userData.nombre,
-        cursoId, cursoNombre: curso.nombre,
+        alumnoUid: user.uid,
+        alumnoNombre: userData.nombre,
+        cursoId,
+        cursoNombre: curso.nombre,
         tipoEvaluacion: form.tipoEvaluacion,
         actividadId: form.actividadId || null,
         actividadTitulo: actividadSeleccionada?.titulo || null,
         titulo: form.titulo,
-        texto: textoFinal,
-        archivoNombre: archivoData.archivoNombre,
-        archivoUrl: archivoData.archivoUrl,
+        texto: textoFinal || '',
+        archivoNombre: archivo?.name || null,
+        // Guardamos las imágenes del PDF para que el docente pueda verlas
+        pdfImagenes: archivoImagenes.length > 0 ? archivoImagenes : null,
         rubricaId: rubrica?.id || null,
         rubricaNombre: rubrica?.nombre || null,
         estado: resultado ? 'evaluado' : 'pendiente',
@@ -199,8 +234,9 @@ export default function CursoAlumno() {
   const resetForm = () => {
     setForm({ tipoEvaluacion: '', actividadId: '', titulo: '', texto: '', rubricaId: '' });
     setActividadSeleccionada(null);
-    setArchivo(null); setArchivoTexto(''); setError(''); setTabActivo('pdf');
-    try { if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl); } catch { /* ignore */ }
+    setArchivo(null); setArchivoTexto(''); setArchivoImagenes([]);
+    setError(''); setTabActivo('pdf');
+    try { if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl); } catch { /* */ }
     setPdfPreviewUrl('');
   };
 
@@ -223,8 +259,9 @@ export default function CursoAlumno() {
     const act = e.actividadId ? actividades.find(a => a.id === e.actividadId) : null;
     setActividadSeleccionada(act || null);
     setArchivo(null); setArchivoTexto(e.texto || '');
-    setTabActivo(e.archivoUrl ? 'pdf' : 'texto');
-    setPdfPreviewUrl(e.archivoUrl || '');
+    setArchivoImagenes(e.pdfImagenes || []);
+    setTabActivo(e.pdfImagenes?.length ? 'pdf' : 'texto');
+    setPdfPreviewUrl('');
   };
 
   const handleDesmatricularse = () =>
@@ -288,7 +325,7 @@ export default function CursoAlumno() {
 
       {msg && <div style={s.successMsg}>{msg}</div>}
 
-      {/* Pesos por tipo */}
+      {/* Pesos */}
       <div style={s.pesosRow}>
         {curso?.tiposEvaluacion?.map((t, i) => {
           const ents = (entregasPorTipo[t.nombre] || []).filter(e => e.estado === 'evaluado');
@@ -390,8 +427,9 @@ export default function CursoAlumno() {
                     {e.archivoNombre && <p style={s.archivoTag}>📄 {e.archivoNombre}</p>}
                     {e.nivelGlobal && <p style={s.entregaNivel}>{e.nivelGlobal}</p>}
                     <p style={s.entregaFecha}>{e.creadoEn?.toDate?.()?.toLocaleDateString('es-PE') || '—'}</p>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }} onClick={ev => ev.stopPropagation()}>
-                      <button style={{ ...s.editBtn }} onClick={() => handleEditarEntrega(e)}>✏️ Editar</button>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }}
+                      onClick={ev => ev.stopPropagation()}>
+                      <button style={s.editBtn} onClick={() => handleEditarEntrega(e)}>✏️ Editar</button>
                       <button style={s.deleteEntregaBtn} onClick={() => handleEliminarEntrega(e)}>🗑</button>
                     </div>
                   </div>
@@ -412,7 +450,7 @@ export default function CursoAlumno() {
             </h3>
             <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '14px', margin: '0 0 24px', lineHeight: '1.5' }}>
               {confirm.tipo === 'entrega'
-                ? <>¿Eliminar <strong style={{ color: '#fff' }}>"{confirm.nombre}"</strong>? No se puede deshacer.</>
+                ? <>¿Eliminar <strong style={{ color: '#fff' }}>"{confirm.nombre}"</strong>?</>
                 : <>¿Desmatricularte de <strong style={{ color: '#fff' }}>"{confirm.nombre}"</strong>?</>
               }
             </p>
@@ -475,7 +513,7 @@ export default function CursoAlumno() {
             <div style={s.grid2}>
               <div>
                 <label style={s.label}>Título del trabajo *</label>
-                <input style={s.input} placeholder="Ej: Tarea 1"
+                <input style={s.input} placeholder="Ej: Práctica 1"
                   value={form.titulo} onChange={e => setForm(f => ({ ...f, titulo: e.target.value }))} />
               </div>
               <div>
@@ -489,8 +527,12 @@ export default function CursoAlumno() {
             </div>
 
             <div style={s.tabs}>
-              <button style={{ ...s.tab, ...(tabActivo === 'pdf' ? s.tabActivo : {}) }} onClick={() => setTabActivo('pdf')}>📄 Subir PDF</button>
-              <button style={{ ...s.tab, ...(tabActivo === 'texto' ? s.tabActivo : {}) }} onClick={() => setTabActivo('texto')}>✏️ Escribir texto</button>
+              <button style={{ ...s.tab, ...(tabActivo === 'pdf' ? s.tabActivo : {}) }} onClick={() => setTabActivo('pdf')}>
+                📄 Subir PDF / Word
+              </button>
+              <button style={{ ...s.tab, ...(tabActivo === 'texto' ? s.tabActivo : {}) }} onClick={() => setTabActivo('texto')}>
+                ✏️ Escribir texto
+              </button>
             </div>
 
             {tabActivo === 'pdf' && (
@@ -498,32 +540,64 @@ export default function CursoAlumno() {
                 style={{ ...s.dropZone, ...(dragging ? s.dropZoneActive : {}), ...(archivo ? s.dropZoneDone : {}) }}
                 onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
                 {leyendo ? (
-                  <div style={s.dropContent}><div style={s.spinner} /><p style={s.dropText}>Extrayendo texto del PDF...</p></div>
+                  <div style={s.dropContent}>
+                    <div style={s.spinner} />
+                    <p style={s.dropText}>Procesando archivo...</p>
+                    <p style={s.dropHint}>Extrayendo páginas para evaluación con IA</p>
+                  </div>
                 ) : archivo ? (
                   <div style={s.dropContent}>
                     <span style={{ fontSize: '40px' }}>✅</span>
                     <p style={{ ...s.dropText, color: '#22c55e' }}>{archivo.name}</p>
-                    <p style={s.dropHint}>PDF listo · texto extraído correctamente</p>
-                    <button style={s.clearBtn} onClick={() => { setArchivo(null); setArchivoTexto(''); setPdfPreviewUrl(''); }}>Quitar archivo</button>
+                    <p style={s.dropHint}>
+                      {archivoImagenes.length > 0
+                        ? `${archivoImagenes.length} páginas listas para evaluación visual`
+                        : 'Texto extraído correctamente'}
+                    </p>
+                    <button style={s.clearBtn} onClick={() => {
+                      setArchivo(null); setArchivoTexto(''); setArchivoImagenes([]);
+                      try { URL.revokeObjectURL(pdfPreviewUrl); } catch { /* */ }
+                      setPdfPreviewUrl('');
+                    }}>Quitar archivo</button>
                   </div>
                 ) : (
                   <div style={s.dropContent}>
                     <span style={{ fontSize: '48px' }}>{dragging ? '📂' : '📄'}</span>
-                    <p style={s.dropText}>{dragging ? 'Suelta el archivo aquí' : 'Arrastra tu PDF aquí'}</p>
-                    <p style={s.dropHint}>o haz clic para seleccionar</p>
+                    <p style={s.dropText}>{dragging ? 'Suelta el archivo aquí' : 'Arrastra tu PDF o Word aquí'}</p>
+                    <p style={s.dropHint}>La IA leerá el documento tal como está</p>
                     <label style={s.selectFileBtn}>
-                      Seleccionar PDF
-                      <input type="file" accept=".pdf" style={{ display: 'none' }} onChange={handleFileInput} />
+                      Seleccionar archivo
+                      <input type="file" accept=".pdf,.doc,.docx" style={{ display: 'none' }} onChange={handleFileInput} />
                     </label>
                   </div>
                 )}
               </div>
             )}
 
+            {/* Vista previa PDF */}
             {tabActivo === 'pdf' && pdfPreviewUrl && (
               <div style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', overflow: 'hidden', marginBottom: '16px' }}>
-                <p style={{ padding: '8px 12px', background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.5)', fontSize: '12px', margin: 0 }}>Vista previa del PDF</p>
-                <iframe title="Vista previa" src={pdfPreviewUrl} style={{ width: '100%', height: '320px', border: 'none', background: '#0f0c29' }} />
+                <p style={{ padding: '8px 12px', background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.5)', fontSize: '12px', margin: 0 }}>
+                  Vista previa del PDF
+                </p>
+                <iframe title="Vista previa" src={pdfPreviewUrl}
+                  style={{ width: '100%', height: '320px', border: 'none', background: '#0f0c29' }} />
+              </div>
+            )}
+
+            {/* Vista previa imágenes en edición */}
+            {tabActivo === 'pdf' && !pdfPreviewUrl && archivoImagenes.length > 0 && (
+              <div style={{ marginBottom: '16px' }}>
+                <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '12px', marginBottom: '8px' }}>
+                  Páginas guardadas ({archivoImagenes.length})
+                </p>
+                <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '4px' }}>
+                  {archivoImagenes.map((img, i) => (
+                    <img key={i} src={`data:image/jpeg;base64,${img}`}
+                      alt={`Página ${i + 1}`}
+                      style={{ height: '120px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.1)', flexShrink: 0 }} />
+                  ))}
+                </div>
               </div>
             )}
 
@@ -537,12 +611,16 @@ export default function CursoAlumno() {
             {enviando && (
               <div style={s.evaluandoMsg}>
                 <div style={s.spinner} />
-                Evaluando con IA{actividadSeleccionada?.enunciadoTexto ? ' (con enunciado del docente)' : ''}...
+                {archivoImagenes.length > 0
+                  ? `Evaluando visualmente con IA (${archivoImagenes.length} páginas)...`
+                  : 'Evaluando con IA...'}
               </div>
             )}
 
             <div style={{ display: 'flex', gap: '12px', marginTop: '20px' }}>
-              <button style={s.secondaryBtn} onClick={() => { setShowForm(false); setEditEntrega(null); resetForm(); }}>Cancelar</button>
+              <button style={s.secondaryBtn} onClick={() => { setShowForm(false); setEditEntrega(null); resetForm(); }}>
+                Cancelar
+              </button>
               <button style={s.primaryBtn} onClick={handleEnviar} disabled={enviando}>
                 {enviando ? 'Evaluando...' : editEntrega ? '💾 Guardar cambios' : '🚀 Enviar y evaluar con IA'}
               </button>
@@ -566,7 +644,8 @@ export default function CursoAlumno() {
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                 <button style={{ ...s.secondaryBtn, padding: '6px 12px', fontSize: '12px' }}
                   onClick={() => handleEditarEntrega(entregaSeleccionada)}>✏️ Editar</button>
-                <button style={s.deleteEntregaBtn} onClick={() => handleEliminarEntrega(entregaSeleccionada)}>🗑</button>
+                <button style={s.deleteEntregaBtn}
+                  onClick={() => handleEliminarEntrega(entregaSeleccionada)}>🗑</button>
                 <button style={s.closeBtn} onClick={() => setEntregaSeleccionada(null)}>✕</button>
               </div>
             </div>
@@ -639,7 +718,8 @@ export default function CursoAlumno() {
               </div>
             )}
 
-            <button style={{ ...s.primaryBtn, width: '100%', marginTop: '20px' }} onClick={() => setEntregaSeleccionada(null)}>
+            <button style={{ ...s.primaryBtn, width: '100%', marginTop: '20px' }}
+              onClick={() => setEntregaSeleccionada(null)}>
               Cerrar
             </button>
           </div>
