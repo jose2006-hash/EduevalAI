@@ -1,6 +1,8 @@
 // src/App.jsx
+import { useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './components/AuthContext.jsx';
+import WelcomeScreen from './components/WelcomeScreen.jsx';
 import Login from './pages/Login.jsx';
 import DashboardDocente from './pages/DashboardDocente.jsx';
 import GestionRubricas from './pages/GestionRubricas.jsx';
@@ -22,24 +24,13 @@ const loadingScreen = (msg = 'Cargando...') => (
 
 const PrivateRoute = ({ children, allowedRole }) => {
   const { user, userData, loading } = useAuth();
-
-  // 1. Firebase aún inicializando
   if (loading) return loadingScreen('Cargando...');
-
-  // 2. No hay sesión → login
   if (!user) return <Navigate to="/login" />;
-
-  // 3. Hay sesión pero userData todavía no llegó de Firestore → esperar
   if (userData === null) return loadingScreen('Cargando perfil...');
-
-  // 4. Usuario sin rol válido en Firestore → login
   if (!userData?.rol) return <Navigate to="/login" />;
-
-  // 5. Rol incorrecto para esta ruta → redirigir según su rol
   if (allowedRole && userData.rol !== allowedRole) {
     return <Navigate to={userData.rol === 'alumno' ? '/mis-cursos' : '/dashboard'} />;
   }
-
   return children;
 };
 
@@ -52,6 +43,12 @@ const RootRedirect = () => {
 };
 
 export default function App() {
+  const [showWelcome, setShowWelcome] = useState(true);
+
+  if (showWelcome) {
+    return <WelcomeScreen onEnter={() => setShowWelcome(false)} />;
+  }
+
   return (
     <AuthProvider>
       <BrowserRouter>
@@ -90,11 +87,3 @@ export default function App() {
     </AuthProvider>
   );
 }
-import WelcomeScreen from './components/WelcomeScreen';
-
-// En tu componente App:
-const [showWelcome, setShowWelcome] = useState(true);
-
-return showWelcome
-  ? <WelcomeScreen onEnter={() => setShowWelcome(false)} />
-  : <TuAppNormal />;
