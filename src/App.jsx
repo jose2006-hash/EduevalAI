@@ -90,3 +90,11 @@ export default function App() {
     </AuthProvider>
   );
 }
+import WelcomeScreen from './components/WelcomeScreen';
+
+// En tu componente App:
+const [showWelcome, setShowWelcome] = useState(true);
+
+return showWelcome
+  ? <WelcomeScreen onEnter={() => setShowWelcome(false)} />
+  : <TuAppNormal />;

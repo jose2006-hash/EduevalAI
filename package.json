@@ -11,12 +11,15 @@
   "dependencies": {
     "chart.js": "^4.4.1",
     "firebase": "^10.7.0",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.7",
     "openai": "^4.28.0",
     "pdfjs-dist": "^5.7.284",
     "react": "^18.2.0",
     "react-chartjs-2": "^5.2.0",
     "react-dom": "^18.2.0",
-    "react-router-dom": "^6.21.3"
+    "react-router-dom": "^6.21.3",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.2.1",

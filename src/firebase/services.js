@@ -65,6 +65,30 @@ export const getAllAlumnos = async () => {
 export const eliminarAlumno = (documentId) =>
   deleteDoc(doc(db, 'usuarios', documentId));
 
+// ─── SUBIR AVATAR ────────────────────────────────────────────────────────────
+
+/**
+ * Sube una imagen de avatar para el usuario al Storage de Firebase.
+ * @param {File} file - Archivo de imagen
+ * @param {string} uid - UID del usuario
+ * @returns {string} URL pública del avatar
+ */
+export const subirAvatar = async (file, uid) => {
+  if (!file) throw new Error('No se proporcionó archivo');
+  const ext = file.name.split('.').pop();
+  const path = `avatars/${uid}/avatar.${ext}`;
+  const storageRef = ref(storage, path);
+  await uploadBytes(storageRef, file);
+  const url = await getDownloadURL(storageRef);
+  // Actualizar también en el documento del usuario
+  const q = query(collection(db, 'usuarios'), where('uid', '==', uid));
+  const snap = await getDocs(q);
+  if (!snap.empty) {
+    await updateDoc(doc(db, 'usuarios', snap.docs[0].id), { avatarUrl: url });
+  }
+  return url;
+};
+
 // ─── CURSOS ──────────────────────────────────────────────────────────────────
 
 export const crearCurso = async (datos) => {
@@ -225,28 +249,21 @@ export const getEntregasByCurso = async (cursoId) => {
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 };
 
-// ✅ Solo las entregas de los cursos que pertenecen al docente
 export const getEntregasByDocente = async (docenteUid) => {
-  // 1. Obtener los cursos del docente
   const cursosSnap = await getDocs(
     query(collection(db, 'cursos'), where('docenteUid', '==', docenteUid))
   );
   const cursoIds = cursosSnap.docs.map(d => d.id);
   if (cursoIds.length === 0) return [];
-
-  // 2. Traer entregas de cada curso en paralelo (Firestore no tiene IN con orderBy cross-collection)
   const promises = cursoIds.map(cid =>
     getDocs(query(collection(db, 'entregas'), where('cursoId', '==', cid)))
   );
   const snaps = await Promise.all(promises);
   const todas = snaps.flatMap(s => s.docs.map(d => ({ id: d.id, ...d.data() })));
-
-  // 3. Ordenar por fecha descendente
   todas.sort((a, b) => (b.creadoEn?.seconds || 0) - (a.creadoEn?.seconds || 0));
   return todas;
 };
 
-// Legado — solo para compatibilidad, NO usar en dashboard (muestra todo)
 export const getTodasEntregas = async () => {
   const snap = await getDocs(
     query(collection(db, 'entregas'), orderBy('creadoEn', 'desc'))
@@ -337,4 +354,233 @@ export const calcularNotaFinal = (entregas, tiposEvaluacion) => {
   if (pesoUsado === 0) return null;
   if (pesoUsado < 100) notaFinal = notaFinal * (100 / pesoUsado);
   return Math.round(notaFinal * 10) / 10;
+};
+
+// ─── EXPORTACIÓN DE NOTAS ────────────────────────────────────────────────────
+
+/**
+ * Exporta las notas a Excel (.xlsx) usando SheetJS (xlsx).
+ * Instala con: npm install xlsx
+ *
+ * @param {Array} entregas - Array de entregas evaluadas
+ * @param {string} docenteNombre - Nombre del docente para el encabezado
+ * @param {string} cursoNombre - Nombre del curso (opcional, para filtrar)
+ */
+export const exportarNotasExcel = async (entregas, docenteNombre = '', cursoNombre = '') => {
+  // Importación dinámica para no aumentar el bundle si no se usa
+  const XLSX = await import('xlsx');
+
+  const fecha = new Date().toLocaleDateString('es-PE');
+  const titulo = cursoNombre
+    ? `Notas — ${cursoNombre}`
+    : 'Reporte de Notas — EduEval AI';
+
+  // Filas del encabezado informativo
+  const metaRows = [
+    [`EduEval AI — Reporte de Notas`],
+    [`Docente: ${docenteNombre}`],
+    [`Fecha: ${fecha}`],
+    cursoNombre ? [`Curso: ${cursoNombre}`] : [],
+    [], // fila en blanco
+  ].filter(r => r.length >= 0);
+
+  // Cabecera de la tabla
+  const headers = [
+    'N°', 'Alumno', 'Curso', 'Tipo de Evaluación',
+    'Título / Trabajo', 'Nota Final', 'Nivel', 'Estado', 'Fecha Entrega',
+  ];
+
+  // Filas de datos
+  const rows = entregas.map((e, i) => [
+    i + 1,
+    e.alumnoNombre || '—',
+    e.cursoNombre || '—',
+    e.tipoEvaluacion || '—',
+    e.titulo || '—',
+    e.estado === 'evaluado' ? (e.notaFinal ?? '—') : '—',
+    e.nivelGlobal || '—',
+    e.estado === 'evaluado' ? 'Evaluado' : 'Pendiente',
+    e.creadoEn?.toDate?.()?.toLocaleDateString('es-PE') || '—',
+  ]);
+
+  // Resumen al final
+  const evaluadas = entregas.filter(e => e.estado === 'evaluado');
+  const promedio = evaluadas.length
+    ? (evaluadas.reduce((s, e) => s + (e.notaFinal || 0), 0) / evaluadas.length).toFixed(1)
+    : '—';
+
+  const summaryRows = [
+    [],
+    ['', '', '', '', 'Total entregas:', entregas.length],
+    ['', '', '', '', 'Promedio clase:', promedio],
+    ['', '', '', '', 'Aprobados (≥11):', evaluadas.filter(e => e.notaFinal >= 11).length],
+    ['', '', '', '', 'Desaprobados (<11):', evaluadas.filter(e => e.notaFinal < 11).length],
+  ];
+
+  // Construir hoja
+  const allRows = [...metaRows, headers, ...rows, ...summaryRows];
+  const ws = XLSX.utils.aoa_to_sheet(allRows);
+
+  // Ancho de columnas
+  ws['!cols'] = [
+    { wch: 5 }, { wch: 28 }, { wch: 22 }, { wch: 20 },
+    { wch: 30 }, { wch: 12 }, { wch: 14 }, { wch: 12 }, { wch: 15 },
+  ];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Notas');
+
+  const nombreArchivo = `EduEval_Notas_${(cursoNombre || 'General').replace(/\s+/g, '_')}_${fecha.replace(/\//g, '-')}.xlsx`;
+  XLSX.writeFile(wb, nombreArchivo);
+};
+
+/**
+ * Exporta las notas a PDF usando jsPDF + autoTable.
+ * Instala con: npm install jspdf jspdf-autotable
+ *
+ * @param {Array} entregas - Array de entregas
+ * @param {string} docenteNombre - Nombre del docente
+ * @param {string} cursoNombre - Nombre del curso (opcional)
+ */
+export const exportarNotasPDF = async (entregas, docenteNombre = '', cursoNombre = '') => {
+  const { default: jsPDF } = await import('jspdf');
+  await import('jspdf-autotable');
+
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const fecha = new Date().toLocaleDateString('es-PE');
+  const evaluadas = entregas.filter(e => e.estado === 'evaluado');
+  const promedio = evaluadas.length
+    ? (evaluadas.reduce((s, e) => s + (e.notaFinal || 0), 0) / evaluadas.length).toFixed(1)
+    : '—';
+
+  // ── Encabezado ──────────────────────────────────────────────────────────────
+  // Fondo superior oscuro
+  doc.setFillColor(15, 12, 41);
+  doc.rect(0, 0, 297, 35, 'F');
+
+  // Línea de acento
+  doc.setFillColor(102, 126, 234);
+  doc.rect(0, 35, 297, 1.5, 'F');
+
+  // Título
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(18);
+  doc.setTextColor(255, 255, 255);
+  doc.text('EduEval AI — Reporte de Notas', 14, 14);
+
+  // Subtítulo
+  doc.setFontSize(10);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(167, 139, 250);
+  const sub = cursoNombre ? `Curso: ${cursoNombre}` : 'Todos los cursos';
+  doc.text(sub, 14, 22);
+
+  // Info derecha
+  doc.setTextColor(200, 200, 220);
+  doc.setFontSize(9);
+  doc.text(`Docente: ${docenteNombre}`, 297 - 14, 14, { align: 'right' });
+  doc.text(`Fecha: ${fecha}`, 297 - 14, 21, { align: 'right' });
+
+  // ── Stats rápidos ───────────────────────────────────────────────────────────
+  const statsY = 42;
+  const statItems = [
+    { label: 'Total Entregas', value: entregas.length, color: [102, 126, 234] },
+    { label: 'Promedio Clase', value: `${promedio}/20`, color: [34, 197, 94] },
+    { label: 'Aprobados', value: evaluadas.filter(e => e.notaFinal >= 11).length, color: [59, 130, 246] },
+    { label: 'Desaprobados', value: evaluadas.filter(e => e.notaFinal < 11).length, color: [239, 68, 68] },
+  ];
+
+  statItems.forEach((s, i) => {
+    const x = 14 + i * 68;
+    doc.setFillColor(25, 20, 55);
+    doc.roundedRect(x, statsY, 62, 18, 2, 2, 'F');
+    doc.setFontSize(16);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(...s.color);
+    doc.text(String(s.value), x + 31, statsY + 10, { align: 'center' });
+    doc.setFontSize(7);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(150, 140, 180);
+    doc.text(s.label.toUpperCase(), x + 31, statsY + 15, { align: 'center' });
+  });
+
+  // ── Tabla ───────────────────────────────────────────────────────────────────
+  const tableData = entregas.map((e, i) => [
+    i + 1,
+    e.alumnoNombre || '—',
+    e.cursoNombre || '—',
+    e.tipoEvaluacion || '—',
+    e.titulo || '—',
+    e.estado === 'evaluado' ? `${e.notaFinal ?? '—'}/20` : '—',
+    e.nivelGlobal || '—',
+    e.estado === 'evaluado' ? 'Evaluado' : 'Pendiente',
+    e.creadoEn?.toDate?.()?.toLocaleDateString('es-PE') || '—',
+  ]);
+
+  doc.autoTable({
+    startY: statsY + 24,
+    head: [['N°', 'Alumno', 'Curso', 'Tipo', 'Trabajo', 'Nota', 'Nivel', 'Estado', 'Fecha']],
+    body: tableData,
+    styles: {
+      fontSize: 8,
+      cellPadding: 3,
+      textColor: [220, 215, 240],
+      lineColor: [40, 35, 80],
+      lineWidth: 0.2,
+    },
+    headStyles: {
+      fillColor: [30, 25, 65],
+      textColor: [167, 139, 250],
+      fontStyle: 'bold',
+      fontSize: 8,
+    },
+    alternateRowStyles: { fillColor: [20, 16, 50] },
+    bodyStyles: { fillColor: [15, 12, 41] },
+    columnStyles: {
+      0: { cellWidth: 10, halign: 'center' },
+      1: { cellWidth: 45 },
+      2: { cellWidth: 38 },
+      3: { cellWidth: 28 },
+      4: { cellWidth: 50 },
+      5: { cellWidth: 18, halign: 'center' },
+      6: { cellWidth: 22, halign: 'center' },
+      7: { cellWidth: 22, halign: 'center' },
+      8: { cellWidth: 26, halign: 'center' },
+    },
+    didParseCell(data) {
+      // Colorear celda de nota
+      if (data.column.index === 5 && data.section === 'body') {
+        const nota = parseFloat(data.cell.raw);
+        if (!isNaN(nota)) {
+          data.cell.styles.textColor = nota >= 14
+            ? [34, 197, 94]
+            : nota >= 11 ? [245, 158, 11] : [239, 68, 68];
+          data.cell.styles.fontStyle = 'bold';
+        }
+      }
+    },
+    margin: { left: 14, right: 14 },
+  });
+
+  // ── Pie de página ───────────────────────────────────────────────────────────
+  const pageCount = doc.internal.getNumberOfPages();
+  for (let i = 1; i <= pageCount; i++) {
+    doc.setPage(i);
+    doc.setFillColor(15, 12, 41);
+    doc.rect(0, doc.internal.pageSize.height - 10, 297, 10, 'F');
+    doc.setFontSize(7);
+    doc.setTextColor(100, 90, 140);
+    doc.text(
+      `EduEval AI — Generado el ${fecha} por ${docenteNombre}`,
+      14, doc.internal.pageSize.height - 3
+    );
+    doc.text(
+      `Página ${i} de ${pageCount}`,
+      297 - 14, doc.internal.pageSize.height - 3,
+      { align: 'right' }
+    );
+  }
+
+  const nombreArchivo = `EduEval_Notas_${(cursoNombre || 'General').replace(/\s+/g, '_')}_${fecha.replace(/\//g, '-')}.pdf`;
+  doc.save(nombreArchivo);
 };

@@ -1,5 +1,5 @@
 // src/pages/DashboardDocente.jsx
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bar, Doughnut } from 'react-chartjs-2';
 import {
@@ -12,6 +12,9 @@ import {
   getAllAlumnos,
   logoutUser,
   eliminarEntrega,
+  subirAvatar,
+  exportarNotasExcel,
+  exportarNotasPDF,
 } from '../firebase/services.js';
 import { useAuth } from '../components/AuthContext.jsx';
 import ModalVisualizarEntrega from '../components/ModalVisualizarEntrega.jsx';
@@ -19,8 +22,10 @@ import ModalVisualizarEntrega from '../components/ModalVisualizarEntrega.jsx';
 ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, PointElement, LineElement, Title, Tooltip, Legend);
 
 export default function DashboardDocente() {
-  const { userData } = useAuth();
+  const { userData, setUserData } = useAuth();
   const navigate = useNavigate();
+  const avatarInputRef = useRef(null);
+
   const [entregas, setEntregas] = useState([]);
   const [cursos, setCursos] = useState([]);
   const [alumnos, setAlumnos] = useState([]);
@@ -29,10 +34,28 @@ export default function DashboardDocente() {
   const [confirm, setConfirm] = useState(null);
   const [entregaSeleccionada, setEntregaSeleccionada] = useState(null);
 
+  // Avatar
+  const [avatarUrl, setAvatarUrl] = useState(null);
+  const [subiendoAvatar, setSubiendoAvatar] = useState(false);
+
+  // Export
+  const [exportando, setExportando] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const [cursofiltro, setCursoFiltro] = useState('');
+
   useEffect(() => { if (userData?.uid) cargar(); }, [userData]);
+  useEffect(() => {
+    if (userData?.avatarUrl) setAvatarUrl(userData.avatarUrl);
+  }, [userData]);
+
+  // Cerrar menú export al hacer click fuera
+  useEffect(() => {
+    const close = () => setShowExportMenu(false);
+    if (showExportMenu) document.addEventListener('click', close);
+    return () => document.removeEventListener('click', close);
+  }, [showExportMenu]);
 
   const cargar = async () => {
-    // ✅ Filtra por docenteUid — cada docente solo ve sus propios cursos y entregas
     const [ents, crs, alms] = await Promise.all([
       getEntregasByDocente(userData.uid),
       getCursosByDocente(userData.uid),
@@ -44,6 +67,58 @@ export default function DashboardDocente() {
     setLoading(false);
   };
 
+  // ── Avatar ──────────────────────────────────────────────────────────────────
+  const handleAvatarChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !userData?.uid) return;
+    setSubiendoAvatar(true);
+    try {
+      const url = await subirAvatar(file, userData.uid);
+      setAvatarUrl(url);
+      if (setUserData) setUserData(prev => ({ ...prev, avatarUrl: url }));
+    } catch (err) {
+      console.error('Error subiendo avatar:', err);
+    } finally {
+      setSubiendoAvatar(false);
+    }
+  };
+
+  // ── Exportar ────────────────────────────────────────────────────────────────
+  const entregasParaExportar = cursofiltro
+    ? entregas.filter(e => e.cursoId === cursofiltro)
+    : entregas;
+
+  const cursoNombreExport = cursofiltro
+    ? cursos.find(c => c.id === cursofiltro)?.nombre || ''
+    : '';
+
+  const handleExportExcel = async () => {
+    setExportando(true);
+    setShowExportMenu(false);
+    try {
+      await exportarNotasExcel(entregasParaExportar, userData?.nombre || 'Docente', cursoNombreExport);
+    } catch (err) {
+      console.error('Error exportando Excel:', err);
+      alert('Error al exportar Excel. Verifica que tienes instalado: npm install xlsx');
+    } finally {
+      setExportando(false);
+    }
+  };
+
+  const handleExportPDF = async () => {
+    setExportando(true);
+    setShowExportMenu(false);
+    try {
+      await exportarNotasPDF(entregasParaExportar, userData?.nombre || 'Docente', cursoNombreExport);
+    } catch (err) {
+      console.error('Error exportando PDF:', err);
+      alert('Error al exportar PDF. Verifica que tienes instalado: npm install jspdf jspdf-autotable');
+    } finally {
+      setExportando(false);
+    }
+  };
+
+  // ── Stats ───────────────────────────────────────────────────────────────────
   const evaluadas = entregas.filter(e => e.estado === 'evaluado');
 
   const stats = {
@@ -71,7 +146,6 @@ export default function DashboardDocente() {
     }]
   };
 
-  // Alumnos únicos de los cursos del docente
   const alumnosDelDocente = alumnos.filter(a =>
     entregas.some(e => e.alumnoUid === a.uid)
   );
@@ -115,11 +189,41 @@ export default function DashboardDocente() {
 
   if (loading) return <div style={styles.loading}>Cargando dashboard...</div>;
 
+  const initiales = (userData?.nombre || 'D').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
+
   return (
     <div style={styles.container}>
       {/* Sidebar */}
       <aside style={styles.sidebar}>
-        <div style={styles.sidebarLogo}>🎓 AcademIA</div>
+        <div style={styles.sidebarLogo}>🎓 EduEval AI</div>
+
+        {/* Avatar del docente */}
+        <div style={styles.avatarSection}>
+          <div
+            style={styles.avatarWrapper}
+            onClick={() => avatarInputRef.current?.click()}
+            title="Cambiar foto de perfil"
+          >
+            {subiendoAvatar ? (
+              <div style={styles.avatarLoading}>⏳</div>
+            ) : avatarUrl ? (
+              <img src={avatarUrl} alt="Avatar" style={styles.avatarImg} />
+            ) : (
+              <div style={styles.avatarInitials}>{initiales}</div>
+            )}
+            <div style={styles.avatarOverlay}>📷</div>
+          </div>
+          <input
+            ref={avatarInputRef}
+            type="file"
+            accept="image/*"
+            style={{ display: 'none' }}
+            onChange={handleAvatarChange}
+          />
+          <p style={styles.avatarName}>{userData?.nombre || 'Docente'}</p>
+          <p style={styles.avatarRole}>Docente</p>
+        </div>
+
         <nav style={styles.nav}>
           {[
             { id: 'dashboard', icon: '📊', label: 'Dashboard' },
@@ -145,9 +249,54 @@ export default function DashboardDocente() {
             <h1 style={styles.pageTitle}>Dashboard</h1>
             <p style={styles.pageSubtitle}>Bienvenido, {userData?.nombre || 'Docente'}</p>
           </div>
-          <button style={styles.ctaBtn} onClick={() => navigate('/cursos')}>
-            📚 Ir a mis cursos
-          </button>
+
+          {/* Controles de exportación */}
+          <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+            {/* Filtro de curso */}
+            <select
+              value={cursofiltro}
+              onChange={e => setCursoFiltro(e.target.value)}
+              style={styles.selectFiltro}
+            >
+              <option value="">Todos los cursos</option>
+              {cursos.map(c => (
+                <option key={c.id} value={c.id}>{c.nombre}</option>
+              ))}
+            </select>
+
+            {/* Botón exportar con menú desplegable */}
+            <div style={{ position: 'relative' }}>
+              <button
+                style={{ ...styles.exportBtn, opacity: exportando ? 0.6 : 1 }}
+                disabled={exportando}
+                onClick={e => { e.stopPropagation(); setShowExportMenu(m => !m); }}
+              >
+                {exportando ? '⏳ Exportando...' : '⬇️ Exportar notas'}
+              </button>
+              {showExportMenu && (
+                <div style={styles.exportMenu} onClick={e => e.stopPropagation()}>
+                  <button style={styles.exportMenuItem} onClick={handleExportExcel}>
+                    <span>📊</span>
+                    <div>
+                      <strong>Excel (.xlsx)</strong>
+                      <p>Tabla completa con resumen</p>
+                    </div>
+                  </button>
+                  <button style={styles.exportMenuItem} onClick={handleExportPDF}>
+                    <span>📄</span>
+                    <div>
+                      <strong>PDF</strong>
+                      <p>Reporte con gráficos y notas</p>
+                    </div>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <button style={styles.ctaBtn} onClick={() => navigate('/cursos')}>
+              📚 Mis cursos
+            </button>
+          </div>
         </header>
 
         {/* Stats */}
@@ -305,31 +454,101 @@ export default function DashboardDocente() {
 const styles = {
   container: { display: 'flex', minHeight: '100vh', background: '#0f0c29', fontFamily: "'Segoe UI', sans-serif" },
   loading: { color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', fontSize: '18px' },
+
+  // Sidebar
   sidebar: { width: '240px', background: 'rgba(255,255,255,0.04)', borderRight: '1px solid rgba(255,255,255,0.08)', padding: '32px 16px', display: 'flex', flexDirection: 'column', gap: '8px', flexShrink: 0 },
-  sidebarLogo: { color: '#fff', fontSize: '20px', fontWeight: '700', padding: '0 12px 24px' },
+  sidebarLogo: { color: '#fff', fontSize: '18px', fontWeight: '700', padding: '0 12px 16px', letterSpacing: '0.5px' },
+
+  // Avatar
+  avatarSection: { display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '8px 0 20px', borderBottom: '1px solid rgba(255,255,255,0.06)', marginBottom: '12px' },
+  avatarWrapper: {
+    width: '72px', height: '72px', borderRadius: '50%',
+    overflow: 'hidden', cursor: 'pointer', position: 'relative',
+    border: '2px solid rgba(167,139,250,0.4)',
+    boxShadow: '0 0 20px rgba(102,126,234,0.2)',
+    marginBottom: '10px',
+  },
+  avatarImg: { width: '100%', height: '100%', objectFit: 'cover' },
+  avatarInitials: {
+    width: '100%', height: '100%',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    background: 'linear-gradient(135deg, #667eea, #764ba2)',
+    color: '#fff', fontSize: '22px', fontWeight: '700',
+  },
+  avatarLoading: { width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', background: 'rgba(102,126,234,0.15)' },
+  avatarOverlay: {
+    position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    fontSize: '18px', opacity: 0, transition: 'opacity 0.2s',
+    ':hover': { opacity: 1 },
+  },
+  avatarName: { color: '#fff', fontSize: '13px', fontWeight: '600', margin: '0 0 3px', textAlign: 'center' },
+  avatarRole: { color: 'rgba(167,139,250,0.8)', fontSize: '11px', margin: 0, letterSpacing: '1px', textTransform: 'uppercase' },
+
   nav: { display: 'flex', flexDirection: 'column', gap: '4px', flex: 1 },
   navItem: { display: 'flex', gap: '12px', alignItems: 'center', padding: '12px 16px', borderRadius: '12px', color: 'rgba(255,255,255,0.5)', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '14px', fontWeight: '500', textAlign: 'left' },
   navItemActive: { background: 'rgba(102,126,234,0.2)', color: '#a78bfa' },
   logoutBtn: { display: 'flex', gap: '8px', alignItems: 'center', padding: '12px 16px', borderRadius: '12px', color: 'rgba(255,255,255,0.4)', background: 'transparent', border: '1px solid rgba(255,255,255,0.08)', cursor: 'pointer', fontSize: '14px', marginTop: 'auto' },
+
+  // Main
   main: { flex: 1, padding: '40px', overflowY: 'auto' },
-  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '36px' },
+  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '36px', flexWrap: 'wrap', gap: '16px' },
   pageTitle: { color: '#fff', fontSize: '28px', fontWeight: '700', margin: '0 0 4px' },
   pageSubtitle: { color: 'rgba(255,255,255,0.4)', fontSize: '14px', margin: 0 },
-  ctaBtn: { padding: '12px 24px', borderRadius: '12px', background: 'linear-gradient(135deg, #667eea, #764ba2)', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: '600', fontSize: '14px' },
+
+  // Export
+  selectFiltro: {
+    padding: '10px 14px', borderRadius: '10px',
+    border: '1px solid rgba(255,255,255,0.12)',
+    background: 'rgba(255,255,255,0.06)',
+    color: '#fff', fontSize: '13px', cursor: 'pointer', outline: 'none',
+  },
+  exportBtn: {
+    padding: '10px 20px', borderRadius: '10px',
+    background: 'rgba(34,197,94,0.15)',
+    border: '1px solid rgba(34,197,94,0.35)',
+    color: '#22c55e', fontSize: '13px', fontWeight: '600',
+    cursor: 'pointer', whiteSpace: 'nowrap',
+  },
+  exportMenu: {
+    position: 'absolute', top: '110%', right: 0, zIndex: 200,
+    background: '#1a1535', borderRadius: '14px', padding: '8px',
+    border: '1px solid rgba(255,255,255,0.1)',
+    boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+    minWidth: '220px',
+  },
+  exportMenuItem: {
+    display: 'flex', gap: '12px', alignItems: 'center',
+    width: '100%', padding: '12px 14px', borderRadius: '10px',
+    background: 'transparent', border: 'none', cursor: 'pointer',
+    color: '#fff', textAlign: 'left',
+    fontSize: '13px',
+    ':hover': { background: 'rgba(255,255,255,0.06)' },
+  },
+
+  ctaBtn: { padding: '10px 20px', borderRadius: '10px', background: 'linear-gradient(135deg, #667eea, #764ba2)', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: '600', fontSize: '13px' },
+
+  // Stats
   statsGrid: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '24px' },
   statCard: { background: 'rgba(255,255,255,0.04)', borderRadius: '16px', padding: '24px', border: '1px solid rgba(255,255,255,0.08)' },
   statIcon: { fontSize: '24px', marginBottom: '12px' },
   statValue: { fontSize: '32px', fontWeight: '700', marginBottom: '4px' },
   statLabel: { color: 'rgba(255,255,255,0.4)', fontSize: '13px' },
+
+  // Cursos
   cursosRow: { display: 'flex', gap: '12px', marginBottom: '24px', flexWrap: 'wrap' },
   cursoMini: { flex: 1, minWidth: '160px', background: 'rgba(102,126,234,0.08)', borderRadius: '12px', padding: '16px', border: '1px solid rgba(102,126,234,0.15)', cursor: 'pointer' },
   cursoMiniNombre: { color: '#fff', fontSize: '14px', fontWeight: '600', margin: '0 0 4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   cursoMiniSub: { color: 'rgba(255,255,255,0.4)', fontSize: '11px', margin: '0 0 8px' },
   cursoMiniNota: { color: '#a78bfa', fontSize: '20px', fontWeight: '700', margin: '0 0 2px' },
   cursoMiniCount: { color: 'rgba(255,255,255,0.3)', fontSize: '11px', margin: 0 },
+
+  // Charts
   chartsGrid: { display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '16px', marginBottom: '24px' },
   chartCard: { background: 'rgba(255,255,255,0.04)', borderRadius: '16px', padding: '24px', border: '1px solid rgba(255,255,255,0.08)' },
   chartTitle: { color: '#fff', fontSize: '16px', fontWeight: '600', margin: '0 0 20px' },
+
+  // Table
   tableCard: { background: 'rgba(255,255,255,0.04)', borderRadius: '16px', padding: '24px', border: '1px solid rgba(255,255,255,0.08)' },
   table: { width: '100%', borderCollapse: 'collapse' },
   th: { color: 'rgba(255,255,255,0.4)', fontSize: '11px', fontWeight: '600', textAlign: 'left', padding: '8px 12px', textTransform: 'uppercase', letterSpacing: '0.05em' },
@@ -339,6 +558,8 @@ const styles = {
   tipoBadge: { background: 'rgba(102,126,234,0.15)', color: '#a78bfa', padding: '3px 8px', borderRadius: '6px', fontSize: '11px', whiteSpace: 'nowrap' },
   viewBtn: { background: 'rgba(59,182,246,0.12)', border: '1px solid rgba(59,182,246,0.2)', color: '#3b82f6', borderRadius: '8px', cursor: 'pointer', padding: '5px 9px', fontSize: '14px' },
   deleteBtn: { background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.2)', color: '#ef4444', borderRadius: '8px', cursor: 'pointer', padding: '5px 9px', fontSize: '14px' },
+
+  // Modals
   overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 },
   confirmModal: { background: '#1a1535', borderRadius: '20px', padding: '36px', width: '100%', maxWidth: '420px', border: '1px solid rgba(255,255,255,0.1)', textAlign: 'center' },
   cancelBtn: { padding: '12px 24px', borderRadius: '12px', background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.7)', border: '1px solid rgba(255,255,255,0.12)', cursor: 'pointer', fontSize: '14px' },
