@@ -4,6 +4,9 @@ import { useState, useEffect, useRef } from 'react';
 const MENSAJE = `La mejor tecnología no se siente como tecnología. Se siente como magia. EduEval AI es esa magia puesta al servicio de la educación peruana. Cada rúbrica, cada nota, cada retroalimentación... construye un estudiante mejor. Soy el M.Sc. Gilder Cieza Altamirano, y esto que estás a punto de ver... va a cambiarte. Bienvenido.`;
 
 export default function WelcomeScreen({ onEnter }) {
+  // 'tap'     → pantalla inicial "toca para comenzar"
+  // 'intro'   → intro con audio
+  const [screen, setScreen] = useState('tap');
   const [phase, setPhase] = useState(0);
   const [speaking, setSpeaking] = useState(false);
   const [audioEnded, setAudioEnded] = useState(false);
@@ -13,35 +16,22 @@ export default function WelcomeScreen({ onEnter }) {
 
   useEffect(() => { mutedRef.current = muted; }, [muted]);
 
-  // Fases visuales
-  useEffect(() => {
-    const t1 = setTimeout(() => setPhase(1), 400);
-    const t2 = setTimeout(() => setPhase(2), 1400);
-    const t3 = setTimeout(() => setPhase(3), 2200);
-    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
-  }, []);
-
-  // Audio automático al montar
-  useEffect(() => {
-    const timer = setTimeout(() => hablar(), 900);
-    return () => {
-      clearTimeout(timer);
-      window.speechSynthesis && window.speechSynthesis.cancel();
-    };
-  }, []);
-
-  // Botón saltar aparece a los 3s
-  useEffect(() => {
-    const t = setTimeout(() => setShowSkip(true), 3000);
-    return () => clearTimeout(t);
-  }, []);
+  const iniciarIntro = () => {
+    setScreen('intro');
+    // Fases visuales
+    setTimeout(() => setPhase(1), 300);
+    setTimeout(() => setPhase(2), 1200);
+    setTimeout(() => setPhase(3), 2000);
+    // Audio — arranca inmediatamente porque ya hubo interacción del usuario
+    setTimeout(() => hablar(), 400);
+    // Botón saltar
+    setTimeout(() => setShowSkip(true), 3000);
+  };
 
   const hablar = () => {
     if (!window.speechSynthesis || mutedRef.current) return;
     window.speechSynthesis.cancel();
-
     const utterance = new SpeechSynthesisUtterance(MENSAJE);
-
     const setVoice = () => {
       const voices = window.speechSynthesis.getVoices();
       const voz =
@@ -54,7 +44,6 @@ export default function WelcomeScreen({ onEnter }) {
     if (window.speechSynthesis.getVoices().length === 0) {
       window.speechSynthesis.onvoiceschanged = setVoice;
     } else { setVoice(); }
-
     utterance.lang = 'es-PE';
     utterance.rate = 0.88;
     utterance.pitch = 1.05;
@@ -68,12 +57,10 @@ export default function WelcomeScreen({ onEnter }) {
   const toggleMute = (e) => {
     e.stopPropagation();
     if (muted) {
-      setMuted(false);
-      mutedRef.current = false;
+      setMuted(false); mutedRef.current = false;
       setTimeout(() => hablar(), 50);
     } else {
-      setMuted(true);
-      mutedRef.current = true;
+      setMuted(true); mutedRef.current = true;
       window.speechSynthesis.cancel();
       setSpeaking(false);
     }
@@ -84,6 +71,92 @@ export default function WelcomeScreen({ onEnter }) {
     onEnter();
   };
 
+  // ── PANTALLA 1: TAP TO BEGIN ─────────────────────────────────────────────
+  if (screen === 'tap') {
+    return (
+      <div
+        onClick={iniciarIntro}
+        style={{
+          position: 'fixed', inset: 0, zIndex: 9999,
+          background: '#000',
+          display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center',
+          cursor: 'pointer',
+          fontFamily: "'Trebuchet MS', sans-serif",
+        }}
+      >
+        {/* Fondo radial sutil */}
+        <div style={{
+          position: 'absolute', inset: 0, pointerEvents: 'none',
+          background: 'radial-gradient(ellipse 55% 55% at 50% 50%, rgba(28,22,58,0.9) 0%, #000 70%)',
+        }} />
+
+        <div style={{
+          position: 'relative', zIndex: 2,
+          display: 'flex', flexDirection: 'column',
+          alignItems: 'center', gap: '28px',
+          animation: 'fadeIn 1.2s ease',
+        }}>
+          {/* Logo / ícono */}
+          <div style={{
+            width: '72px', height: '72px', borderRadius: '50%',
+            background: 'rgba(102,126,234,0.12)',
+            border: '1px solid rgba(167,139,250,0.3)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: '32px',
+            animation: 'pulseGlow 2.5s ease-in-out infinite',
+          }}>
+            🎓
+          </div>
+
+          <div style={{ textAlign: 'center' }}>
+            <p style={{
+              color: 'rgba(255,255,255,0.25)', fontSize: '10px',
+              letterSpacing: '4px', textTransform: 'uppercase',
+              margin: '0 0 10px',
+            }}>Bienvenido a</p>
+            <h1 style={{
+              color: '#fff', fontWeight: '300',
+              fontSize: 'clamp(26px, 5vw, 42px)',
+              margin: '0 0 6px', letterSpacing: '2px',
+            }}>EduEval AI</h1>
+            <p style={{
+              color: 'rgba(167,139,250,0.7)', fontSize: '12px',
+              letterSpacing: '2px', textTransform: 'uppercase', margin: 0,
+            }}>Plataforma de evaluación inteligente</p>
+          </div>
+
+          {/* Línea */}
+          <div style={{
+            width: '60px', height: '1px',
+            background: 'linear-gradient(90deg, transparent, rgba(167,139,250,0.5), transparent)',
+          }} />
+
+          {/* CTA */}
+          <div style={{ textAlign: 'center' }}>
+            <div style={{
+              color: 'rgba(255,255,255,0.5)', fontSize: '13px',
+              letterSpacing: '2px', textTransform: 'uppercase',
+              animation: 'blink 2s ease-in-out infinite',
+            }}>
+              Toca en cualquier lugar para comenzar
+            </div>
+          </div>
+        </div>
+
+        <style>{`
+          @keyframes fadeIn { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
+          @keyframes blink { 0%,100% { opacity:0.5; } 50% { opacity:1; } }
+          @keyframes pulseGlow {
+            0%,100% { box-shadow:0 0 20px rgba(102,126,234,0.2); border-color:rgba(167,139,250,0.3); }
+            50% { box-shadow:0 0 40px rgba(102,126,234,0.5); border-color:rgba(167,139,250,0.7); }
+          }
+        `}</style>
+      </div>
+    );
+  }
+
+  // ── PANTALLA 2: INTRO CON AUDIO ──────────────────────────────────────────
   return (
     <div style={{
       position: 'fixed', inset: 0, zIndex: 9999,
@@ -93,7 +166,6 @@ export default function WelcomeScreen({ onEnter }) {
       fontFamily: "'Georgia', 'Times New Roman', serif",
       overflow: 'hidden',
     }}>
-
       {/* Spotlight */}
       <div style={{
         position: 'absolute', inset: 0, pointerEvents: 'none',
@@ -113,18 +185,16 @@ export default function WelcomeScreen({ onEnter }) {
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           cursor: 'pointer', fontSize: '20px',
           opacity: phase >= 1 ? 1 : 0,
-          transition: 'opacity 0.6s ease 1s',
+          transition: 'opacity 0.6s ease 0.8s',
         }}>
         {muted ? '🔇' : speaking ? '🔊' : '🔈'}
       </button>
 
-      {/* Contenido */}
       <div style={{
         position: 'relative', zIndex: 2,
         display: 'flex', flexDirection: 'column',
         alignItems: 'center', maxWidth: '580px', width: '90%',
       }}>
-
         {/* Foto + anillos */}
         <div style={{ position: 'relative', marginBottom: '32px' }}>
           {speaking && !muted && [14, 28, 44].map((offset, i) => (
@@ -135,17 +205,12 @@ export default function WelcomeScreen({ onEnter }) {
             }} />
           ))}
           <div style={{
-            width: '190px', height: '190px',
-            borderRadius: '50%', overflow: 'hidden',
-            border: speaking && !muted
-              ? '2px solid rgba(167,139,250,0.85)'
-              : '2px solid rgba(255,255,255,0.1)',
-            boxShadow: phase >= 1
-              ? '0 0 80px 18px rgba(102,126,234,0.24), 0 0 200px 55px rgba(118,75,162,0.1)'
-              : 'none',
+            width: '190px', height: '190px', borderRadius: '50%', overflow: 'hidden',
+            border: speaking && !muted ? '2px solid rgba(167,139,250,0.85)' : '2px solid rgba(255,255,255,0.1)',
+            boxShadow: phase >= 1 ? '0 0 80px 18px rgba(102,126,234,0.24), 0 0 200px 55px rgba(118,75,162,0.1)' : 'none',
             opacity: phase >= 1 ? 1 : 0,
             transform: phase >= 1 ? 'scale(1)' : 'scale(0.7)',
-            transition: 'all 1.3s cubic-bezier(0.34, 1.56, 0.64, 1), border 0.4s ease',
+            transition: 'all 1.3s cubic-bezier(0.34,1.56,0.64,1), border 0.4s ease',
           }}>
             <img src="/gilder.png" alt="M.Sc. Gilder Cieza Altamirano"
               style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center top' }} />
@@ -156,13 +221,11 @@ export default function WelcomeScreen({ onEnter }) {
         <div style={{
           display: 'flex', alignItems: 'center', gap: '4px',
           height: '24px', marginBottom: '24px',
-          opacity: speaking && !muted ? 1 : 0,
-          transition: 'opacity 0.4s',
+          opacity: speaking && !muted ? 1 : 0, transition: 'opacity 0.4s',
         }}>
           {[0.6, 1, 0.75, 1.2, 0.5, 0.9, 0.65].map((speed, i) => (
             <div key={i} style={{
-              width: '3px', borderRadius: '2px',
-              background: 'rgba(167,139,250,0.75)',
+              width: '3px', borderRadius: '2px', background: 'rgba(167,139,250,0.75)',
               animation: `bar ${speed}s ease-in-out infinite ${i * 0.08}s alternate`,
             }} />
           ))}
@@ -203,12 +266,13 @@ export default function WelcomeScreen({ onEnter }) {
           transition: 'width 1.1s ease 0.4s', margin: '28px 0',
         }} />
 
-        {/* Botón ingresar — aparece solo cuando termina el audio */}
+        {/* Botón ingresar — solo al terminar el audio */}
         <div style={{
           opacity: audioEnded ? 1 : 0,
           transform: audioEnded ? 'translateY(0)' : 'translateY(16px)',
           transition: 'all 0.9s ease',
           display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '14px',
+          pointerEvents: audioEnded ? 'auto' : 'none',
         }}>
           <button onClick={handleEnter} style={{
             padding: '14px 52px', borderRadius: '40px',
@@ -224,45 +288,41 @@ export default function WelcomeScreen({ onEnter }) {
           </button>
           <p style={{
             color: 'rgba(255,255,255,0.13)', fontSize: '10px',
-            letterSpacing: '1px', margin: 0,
-            fontFamily: 'Trebuchet MS, sans-serif',
+            letterSpacing: '1px', margin: 0, fontFamily: 'Trebuchet MS, sans-serif',
           }}>Haz clic en cualquier lugar para continuar</p>
         </div>
       </div>
 
-      {/* Botón saltar — aparece a los 3s, desaparece cuando termina el audio */}
+      {/* Botón saltar */}
       {showSkip && !audioEnded && (
-        <button
-          onClick={handleEnter}
-          style={{
-            position: 'absolute', bottom: '32px', right: '32px', zIndex: 10,
-            padding: '10px 22px', borderRadius: '20px',
-            border: '1px solid rgba(255,255,255,0.2)',
-            background: 'rgba(0,0,0,0.5)',
-            color: 'rgba(255,255,255,0.6)', fontSize: '12px',
-            letterSpacing: '1.5px', textTransform: 'uppercase',
-            cursor: 'pointer', backdropFilter: 'blur(8px)',
-            animation: 'fadeIn 0.5s ease',
-          }}
-        >
+        <button onClick={handleEnter} style={{
+          position: 'absolute', bottom: '32px', right: '32px', zIndex: 10,
+          padding: '10px 22px', borderRadius: '20px',
+          border: '1px solid rgba(255,255,255,0.2)',
+          background: 'rgba(0,0,0,0.5)',
+          color: 'rgba(255,255,255,0.6)', fontSize: '12px',
+          letterSpacing: '1.5px', textTransform: 'uppercase',
+          cursor: 'pointer', backdropFilter: 'blur(8px)',
+          animation: 'fadeIn 0.5s ease',
+        }}>
           Saltar intro ▶▶
         </button>
       )}
 
       <style>{`
         @keyframes pulseGlow {
-          0%, 100% { box-shadow: 0 0 18px rgba(102,126,234,0.18); border-color: rgba(167,139,250,0.35); }
-          50% { box-shadow: 0 0 38px rgba(102,126,234,0.48), 0 0 75px rgba(118,75,162,0.18); border-color: rgba(167,139,250,0.75); }
+          0%,100% { box-shadow:0 0 18px rgba(102,126,234,0.18); border-color:rgba(167,139,250,0.35); }
+          50% { box-shadow:0 0 38px rgba(102,126,234,0.48),0 0 75px rgba(118,75,162,0.18); border-color:rgba(167,139,250,0.75); }
         }
         @keyframes ring {
-          0% { transform: scale(1); opacity: 0.65; }
-          100% { transform: scale(1.2); opacity: 0; }
+          0% { transform:scale(1); opacity:0.65; }
+          100% { transform:scale(1.2); opacity:0; }
         }
         @keyframes bar {
-          0% { height: 3px; } 100% { height: 20px; }
+          0% { height:3px; } 100% { height:20px; }
         }
         @keyframes fadeIn {
-          from { opacity: 0; } to { opacity: 1; }
+          from { opacity:0; } to { opacity:1; }
         }
       `}</style>
     </div>
