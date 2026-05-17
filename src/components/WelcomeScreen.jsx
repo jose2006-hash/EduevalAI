@@ -6,19 +6,31 @@ export default function WelcomeScreen({ onEnter }) {
   const [videoError, setVideoError] = useState(false);
   const [showSkip, setShowSkip] = useState(false);
   const [speaking, setSpeaking] = useState(false);
+  const [videoReady, setVideoReady] = useState(false);
   const videoRef = useRef(null);
 
-  // Mostrar botón "saltar" a los 3 segundos
+  // Mostrar botón saltar a los 3s
   useEffect(() => {
     const t = setTimeout(() => setShowSkip(true), 3000);
     return () => clearTimeout(t);
   }, []);
 
-  // Fallback: si el video falla, usar Web Speech API
+  // Intentar reproducir cuando el video esté listo
+  useEffect(() => {
+    if (!videoReady || !videoRef.current) return;
+    const playPromise = videoRef.current.play();
+    if (playPromise !== undefined) {
+      playPromise.catch(() => {
+        // Autoplay bloqueado — mostrar botón de play manual
+        setShowSkip(true);
+      });
+    }
+  }, [videoReady]);
+
+  // Fallback con voz si el video falla
   useEffect(() => {
     if (!videoError) return;
     const MENSAJE = `La mejor tecnología no se siente como tecnología. Se siente como magia. EduEval AI es esa magia puesta al servicio de la educación peruana. Cada rúbrica, cada nota, cada retroalimentación... construye un estudiante mejor. Soy el M.Sc. Gilder Cieza Altamirano, y esto que estás a punto de ver... va a cambiarte. Bienvenido.`;
-
     if (!window.speechSynthesis) { setVideoEnded(true); return; }
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(MENSAJE);
@@ -42,44 +54,50 @@ export default function WelcomeScreen({ onEnter }) {
     utterance.onend = () => { setSpeaking(false); setVideoEnded(true); };
     utterance.onerror = () => { setSpeaking(false); setVideoEnded(true); };
     window.speechSynthesis.speak(utterance);
-
     return () => window.speechSynthesis.cancel();
   }, [videoError]);
 
   const handleEnter = () => {
     window.speechSynthesis && window.speechSynthesis.cancel();
-    if (videoRef.current) { videoRef.current.pause(); }
+    if (videoRef.current) videoRef.current.pause();
     onEnter();
   };
 
-  const handleSkip = (e) => {
-    e.stopPropagation();
-    window.speechSynthesis && window.speechSynthesis.cancel();
-    if (videoRef.current) { videoRef.current.pause(); }
-    onEnter();
+  // Click en pantalla: si el video está pausado por autoplay, reproducirlo
+  const handleScreenClick = () => {
+    if (videoEnded) { handleEnter(); return; }
+    if (videoRef.current && videoRef.current.paused && !videoError) {
+      videoRef.current.play().catch(() => {});
+    }
   };
 
   return (
-    <div style={{
-      position: 'fixed', inset: 0, zIndex: 9999,
-      background: '#000',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      fontFamily: "'Trebuchet MS', sans-serif",
-      overflow: 'hidden',
-    }}>
-
-      {/* ── VIDEO (normal) ── */}
+    <div
+      onClick={handleScreenClick}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 9999,
+        background: '#000',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontFamily: "'Trebuchet MS', sans-serif",
+        overflow: 'hidden',
+        cursor: 'pointer',
+      }}
+    >
+      {/* ── VIDEO ── */}
       {!videoError && (
         <video
           ref={videoRef}
           src="/intro.mp4"
-          autoPlay
+          muted={false}
           playsInline
+          preload="auto"
           style={{
             position: 'absolute', inset: 0,
             width: '100%', height: '100%',
-            objectFit: 'cover',
+            objectFit: 'contain',   // ← contain para no recortar ni hacer zoom
+            background: '#000',
           }}
+          onCanPlayThrough={() => setVideoReady(true)}
           onEnded={() => setVideoEnded(true)}
           onError={() => setVideoError(true)}
         />
@@ -88,33 +106,25 @@ export default function WelcomeScreen({ onEnter }) {
       {/* ── FALLBACK: foto + audio ── */}
       {videoError && (
         <>
-          {/* Spotlight */}
           <div style={{
             position: 'absolute', inset: 0, pointerEvents: 'none',
             background: 'radial-gradient(ellipse 65% 75% at 50% 44%, rgba(28,22,58,0.97) 0%, #000 68%)',
           }} />
-
           <div style={{
             position: 'relative', zIndex: 2,
-            display: 'flex', flexDirection: 'column',
-            alignItems: 'center',
+            display: 'flex', flexDirection: 'column', alignItems: 'center',
           }}>
-            {/* Anillos */}
             <div style={{ position: 'relative', marginBottom: '28px' }}>
               {speaking && [14, 28, 44].map((offset, i) => (
                 <div key={i} style={{
-                  position: 'absolute', inset: `-${offset}px`,
-                  borderRadius: '50%',
+                  position: 'absolute', inset: `-${offset}px`, borderRadius: '50%',
                   border: `${i === 0 ? 2 : 1}px solid rgba(102,126,234,${0.45 - i * 0.13})`,
                   animation: `ring 1.6s ease-out infinite ${i * 0.28}s`,
                 }} />
               ))}
               <div style={{
-                width: '180px', height: '180px',
-                borderRadius: '50%', overflow: 'hidden',
-                border: speaking
-                  ? '2px solid rgba(167,139,250,0.85)'
-                  : '2px solid rgba(255,255,255,0.1)',
+                width: '180px', height: '180px', borderRadius: '50%', overflow: 'hidden',
+                border: speaking ? '2px solid rgba(167,139,250,0.85)' : '2px solid rgba(255,255,255,0.1)',
                 boxShadow: '0 0 80px 18px rgba(102,126,234,0.24)',
               }}>
                 <img
@@ -124,8 +134,6 @@ export default function WelcomeScreen({ onEnter }) {
                 />
               </div>
             </div>
-
-            {/* Barras */}
             <div style={{
               display: 'flex', alignItems: 'center', gap: '4px',
               height: '24px', marginBottom: '20px',
@@ -140,11 +148,9 @@ export default function WelcomeScreen({ onEnter }) {
               ))}
               <span style={{
                 color: 'rgba(167,139,250,0.55)', fontSize: '10px',
-                letterSpacing: '2.5px', textTransform: 'uppercase',
-                marginLeft: '8px',
+                letterSpacing: '2.5px', textTransform: 'uppercase', marginLeft: '8px',
               }}>hablando</span>
             </div>
-
             <h1 style={{
               color: '#fff', fontWeight: '400',
               fontSize: 'clamp(20px, 3.5vw, 28px)',
@@ -162,28 +168,40 @@ export default function WelcomeScreen({ onEnter }) {
         </>
       )}
 
-      {/* ── Overlay oscuro al terminar ── */}
+      {/* ── Hint de clic si autoplay bloqueado ── */}
+      {!videoEnded && !videoError && videoReady && (
+        <div style={{
+          position: 'absolute', bottom: '90px',
+          color: 'rgba(255,255,255,0.4)', fontSize: '12px',
+          letterSpacing: '2px', textTransform: 'uppercase',
+          animation: 'fadeIn 1s ease 1s both',
+          pointerEvents: 'none',
+        }}>
+          Toca para reproducir
+        </div>
+      )}
+
+      {/* ── Overlay al terminar ── */}
       {videoEnded && (
         <div style={{
           position: 'absolute', inset: 0,
-          background: 'rgba(0,0,0,0.6)',
-          backdropFilter: 'blur(4px)',
+          background: 'rgba(0,0,0,0.65)',
+          backdropFilter: 'blur(6px)',
           animation: 'fadeIn 0.8s ease',
         }} />
       )}
 
-      {/* ── Botón INGRESAR (solo cuando termina) ── */}
+      {/* ── Botón INGRESAR (solo al terminar) ── */}
       {videoEnded && (
         <div style={{
           position: 'absolute', zIndex: 10,
           display: 'flex', flexDirection: 'column',
           alignItems: 'center', gap: '16px',
-          animation: 'slideUp 0.8s ease',
+          animation: 'slideUp 0.9s ease',
         }}>
           <p style={{
-            color: 'rgba(255,255,255,0.5)', fontSize: '12px',
-            letterSpacing: '3px', textTransform: 'uppercase',
-            margin: 0,
+            color: 'rgba(255,255,255,0.45)', fontSize: '11px',
+            letterSpacing: '3px', textTransform: 'uppercase', margin: 0,
           }}>
             M.Sc. Gilder Cieza Altamirano
           </p>
@@ -195,8 +213,7 @@ export default function WelcomeScreen({ onEnter }) {
               background: 'rgba(102,126,234,0.15)',
               color: '#fff', fontSize: '15px',
               letterSpacing: '3px', textTransform: 'uppercase',
-              cursor: 'pointer',
-              backdropFilter: 'blur(12px)',
+              cursor: 'pointer', backdropFilter: 'blur(12px)',
               animation: 'pulseGlow 2.5s ease-in-out infinite',
             }}
           >
@@ -211,17 +228,16 @@ export default function WelcomeScreen({ onEnter }) {
         </div>
       )}
 
-      {/* ── Botón SALTAR (aparece a los 3s) ── */}
+      {/* ── Botón SALTAR ── */}
       {showSkip && !videoEnded && (
         <button
-          onClick={handleSkip}
+          onClick={(e) => { e.stopPropagation(); handleEnter(); }}
           style={{
-            position: 'absolute', bottom: '32px', right: '32px',
-            zIndex: 10,
-            padding: '10px 20px', borderRadius: '20px',
+            position: 'absolute', bottom: '32px', right: '32px', zIndex: 10,
+            padding: '10px 22px', borderRadius: '20px',
             border: '1px solid rgba(255,255,255,0.2)',
-            background: 'rgba(0,0,0,0.5)',
-            color: 'rgba(255,255,255,0.6)', fontSize: '12px',
+            background: 'rgba(0,0,0,0.55)',
+            color: 'rgba(255,255,255,0.65)', fontSize: '12px',
             letterSpacing: '1.5px', textTransform: 'uppercase',
             cursor: 'pointer', backdropFilter: 'blur(8px)',
             animation: 'fadeIn 0.5s ease',
