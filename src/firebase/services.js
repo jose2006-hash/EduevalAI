@@ -428,7 +428,13 @@ export const exportarNotasExcel = async (entregas, docenteNombre = '', cursoNomb
 
 export const exportarNotasPDF = async (entregas, docenteNombre = '', cursoNombre = '') => {
   const { default: jsPDF } = await import('jspdf');
-  await import('jspdf-autotable');
+  let autoTableOk = true;
+  try {
+    await import('jspdf-autotable');
+  } catch (err) {
+    console.warn('No se pudo cargar jspdf-autotable, se usará un fallback de texto:', err);
+    autoTableOk = false;
+  }
 
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
   const fecha = new Date().toLocaleDateString('es-PE');
@@ -493,49 +499,70 @@ export const exportarNotasPDF = async (entregas, docenteNombre = '', cursoNombre
     e.creadoEn?.toDate?.()?.toLocaleDateString('es-PE') || '—',
   ]);
 
-  doc.autoTable({
-    startY: statsY + 24,
-    head: [['N°', 'Alumno', 'Curso', 'Tipo', 'Trabajo', 'Nota', 'Nivel', 'Estado', 'Fecha']],
-    body: tableData,
-    styles: {
-      fontSize: 8,
-      cellPadding: 3,
-      textColor: [220, 215, 240],
-      lineColor: [40, 35, 80],
-      lineWidth: 0.2,
-    },
-    headStyles: {
-      fillColor: [30, 25, 65],
-      textColor: [167, 139, 250],
-      fontStyle: 'bold',
-      fontSize: 8,
-    },
-    alternateRowStyles: { fillColor: [20, 16, 50] },
-    bodyStyles: { fillColor: [15, 12, 41] },
-    columnStyles: {
-      0: { cellWidth: 10, halign: 'center' },
-      1: { cellWidth: 45 },
-      2: { cellWidth: 38 },
-      3: { cellWidth: 28 },
-      4: { cellWidth: 50 },
-      5: { cellWidth: 18, halign: 'center' },
-      6: { cellWidth: 22, halign: 'center' },
-      7: { cellWidth: 22, halign: 'center' },
-      8: { cellWidth: 26, halign: 'center' },
-    },
-    didParseCell(data) {
-      if (data.column.index === 5 && data.section === 'body') {
-        const nota = parseFloat(data.cell.raw);
-        if (!isNaN(nota)) {
-          data.cell.styles.textColor = nota >= 14
-            ? [34, 197, 94]
-            : nota >= 11 ? [245, 158, 11] : [239, 68, 68];
-          data.cell.styles.fontStyle = 'bold';
+  if (autoTableOk && typeof doc.autoTable === 'function') {
+    doc.autoTable({
+      startY: statsY + 24,
+      head: [['N°', 'Alumno', 'Curso', 'Tipo', 'Trabajo', 'Nota', 'Nivel', 'Estado', 'Fecha']],
+      body: tableData,
+      styles: {
+        fontSize: 8,
+        cellPadding: 3,
+        textColor: [220, 215, 240],
+        lineColor: [40, 35, 80],
+        lineWidth: 0.2,
+      },
+      headStyles: {
+        fillColor: [30, 25, 65],
+        textColor: [167, 139, 250],
+        fontStyle: 'bold',
+        fontSize: 8,
+      },
+      alternateRowStyles: { fillColor: [20, 16, 50] },
+      bodyStyles: { fillColor: [15, 12, 41] },
+      columnStyles: {
+        0: { cellWidth: 10, halign: 'center' },
+        1: { cellWidth: 45 },
+        2: { cellWidth: 38 },
+        3: { cellWidth: 28 },
+        4: { cellWidth: 50 },
+        5: { cellWidth: 18, halign: 'center' },
+        6: { cellWidth: 22, halign: 'center' },
+        7: { cellWidth: 22, halign: 'center' },
+        8: { cellWidth: 26, halign: 'center' },
+      },
+      didParseCell(data) {
+        if (data.column.index === 5 && data.section === 'body') {
+          const nota = parseFloat(data.cell.raw);
+          if (!isNaN(nota)) {
+            data.cell.styles.textColor = nota >= 14
+              ? [34, 197, 94]
+              : nota >= 11 ? [245, 158, 11] : [239, 68, 68];
+            data.cell.styles.fontStyle = 'bold';
+          }
         }
+      },
+      margin: { left: 14, right: 14 },
+    });
+  } else {
+    doc.setFontSize(8);
+    doc.setTextColor(220, 215, 240);
+    doc.text('Nota: No se pudo usar jspdf-autotable. Se genera un PDF con tabla simple.', 14, statsY + 24);
+    let y = statsY + 32;
+    const lineHeight = 6;
+    const rows = [
+      ['N°', 'Alumno', 'Curso', 'Tipo', 'Trabajo', 'Nota', 'Nivel', 'Estado', 'Fecha'],
+      ...tableData.map(row => row.map(cell => String(cell).replace(/\s+/g, ' '))),
+    ];
+
+    rows.forEach((row, index) => {
+      if (y > 280) {
+        doc.addPage();
+        y = 20;
       }
-    },
-    margin: { left: 14, right: 14 },
-  });
+      doc.text(row.join(' | '), 14, y, { maxWidth: 269 });
+      y += lineHeight;
+    });
+  }
 
   const pageCount = doc.internal.getNumberOfPages();
   for (let i = 1; i <= pageCount; i++) {

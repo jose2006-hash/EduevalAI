@@ -112,7 +112,7 @@ export default function DashboardDocente() {
       await exportarNotasPDF(entregasParaExportar, userData?.nombre || 'Docente', cursoNombreExport);
     } catch (err) {
       console.error('Error exportando PDF:', err);
-      alert('Error al exportar PDF. Verifica que tienes instalado: npm install jspdf jspdf-autotable');
+      alert(`Error al exportar PDF. Revisa la consola para más detalles. Si el problema persiste, instala: npm install jspdf jspdf-autotable`);
     } finally {
       setExportando(false);
     }

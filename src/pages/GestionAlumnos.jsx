@@ -164,7 +164,8 @@ export default function GestionAlumnos() {
       });
       doc.save(`EduEval_Alumnos_${fecha.replace(/\//g, '-')}.pdf`);
     } catch (err) {
-      alert('Error exportando PDF. Instala: npm install jspdf jspdf-autotable');
+      console.error('Error exportando PDF:', err);
+      alert(`Error exportando PDF. Revisa la consola para más detalles. Asegúrate de tener instaladas las dependencias: npm install jspdf jspdf-autotable`);
     } finally {
       setExportando(false);
     }
