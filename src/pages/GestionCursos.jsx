@@ -9,6 +9,7 @@ import {
   getEntregasByCurso, eliminarEntrega,
   getRubricas,
   actualizarEntregaAlumno, // ← para editar nota
+  actualizarActividad,
 } from '../firebase/services.js';
 import { useAuth } from '../components/AuthContext.jsx';
 
@@ -38,6 +39,8 @@ export default function GestionCursos() {
   const [showActForm, setShowActForm] = useState(false);
   const [guardandoAct, setGuardandoAct] = useState(false);
   const [msgAct, setMsgAct] = useState('');
+  const [editingActividadId, setEditingActividadId] = useState(null);
+  const [editFecha, setEditFecha] = useState('');
   const [formAct, setFormAct] = useState({
     titulo: '', tipoEvaluacion: '', descripcion: '',
     enunciadoTexto: '', enunciadoNombre: '', rubricaId: '', fechaLimite: '',
@@ -113,6 +116,34 @@ export default function GestionCursos() {
       }
     } catch (err) { setMsg('❌ Error: ' + err.message); }
     setConfirm(null);
+  };
+
+  const handleEditarActividad = (a) => {
+    setEditingActividadId(a.id);
+    setEditFecha(a.fechaLimite || '');
+  };
+
+  const handleCancelarEditar = () => {
+    setEditingActividadId(null);
+    setEditFecha('');
+  };
+
+  const handleGuardarFecha = async () => {
+    if (!editingActividadId) return;
+    try {
+      setGuardandoAct(true);
+      await actualizarActividad(editingActividadId, { fechaLimite: editFecha });
+      const acts = await getActividadesByCurso(cursoActividades.id);
+      setActividades(acts);
+      setMsgAct('✅ Fecha actualizada');
+      setEditingActividadId(null);
+      setEditFecha('');
+    } catch (err) {
+      console.error(err);
+      setMsgAct('❌ ' + (err.message || 'Error actualizando fecha'));
+    } finally {
+      setGuardandoAct(false);
+    }
   };
 
   // ── Guardar nota editada por docente ──────────────────────────────────────
@@ -783,7 +814,20 @@ export default function GestionCursos() {
                           </p>
                         )}
                       </div>
-                      <button style={s.expulsarBtn} title="Eliminar actividad" onClick={() => handleEliminarActividad(a)}>🗑</button>
+                      {editingActividadId === a.id ? (
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                          <input type="datetime-local" style={{ ...s.input, padding: '6px 8px', height: '36px' }}
+                            value={editFecha}
+                            onChange={e => setEditFecha(e.target.value)} />
+                          <button style={s.primaryBtn} disabled={guardandoAct} onClick={handleGuardarFecha}>Guardar</button>
+                          <button style={s.ghostBtn} onClick={handleCancelarEditar}>Cancelar</button>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <button style={s.secondaryBtn} title="Editar fecha" onClick={() => handleEditarActividad(a)}>✏️</button>
+                          <button style={s.expulsarBtn} title="Eliminar actividad" onClick={() => handleEliminarActividad(a)}>🗑</button>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
