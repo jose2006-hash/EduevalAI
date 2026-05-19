@@ -151,8 +151,6 @@ export const getActividad = async (id) => {
 
 export const eliminarActividad = (id) => deleteDoc(doc(db, 'actividades', id));
 
-// ── NUEVAS: actualizar actividad y subir enunciado al Storage ─────────────────
-
 export const actualizarActividad = (id, datos) =>
   updateDoc(doc(db, 'actividades', id), { ...datos, actualizadoEn: serverTimestamp() });
 
@@ -367,11 +365,7 @@ export const calcularNotaFinal = (entregas, tiposEvaluacion) => {
 
 export const exportarNotasExcel = async (entregas, docenteNombre = '', cursoNombre = '') => {
   const XLSX = await import('xlsx');
-
   const fecha = new Date().toLocaleDateString('es-PE');
-  const titulo = cursoNombre
-    ? `Notas — ${cursoNombre}`
-    : 'Reporte de Notas — EduEval AI';
 
   const metaRows = [
     [`EduEval AI — Reporte de Notas`],
@@ -386,7 +380,14 @@ export const exportarNotasExcel = async (entregas, docenteNombre = '', cursoNomb
     'Título / Trabajo', 'Nota Final', 'Nivel', 'Estado', 'Fecha Entrega',
   ];
 
-  const rows = entregas.map((e, i) => [
+  // Ordenar por nota descendente
+  const sorted = [...entregas].sort((a, b) => {
+    if (a.estado === 'evaluado' && b.estado !== 'evaluado') return -1;
+    if (a.estado !== 'evaluado' && b.estado === 'evaluado') return 1;
+    return (b.notaFinal ?? -1) - (a.notaFinal ?? -1);
+  });
+
+  const rows = sorted.map((e, i) => [
     i + 1,
     e.alumnoNombre || '—',
     e.cursoNombre || '—',
@@ -413,7 +414,6 @@ export const exportarNotasExcel = async (entregas, docenteNombre = '', cursoNomb
 
   const allRows = [...metaRows, headers, ...rows, ...summaryRows];
   const ws = XLSX.utils.aoa_to_sheet(allRows);
-
   ws['!cols'] = [
     { wch: 5 }, { wch: 28 }, { wch: 22 }, { wch: 20 },
     { wch: 30 }, { wch: 12 }, { wch: 14 }, { wch: 12 }, { wch: 15 },
@@ -426,162 +426,270 @@ export const exportarNotasExcel = async (entregas, docenteNombre = '', cursoNomb
   XLSX.writeFile(wb, nombreArchivo);
 };
 
+// ─── PDF ESTILO APPLE — sin jspdf-autotable, tabla dibujada a mano ───────────
+//
+//   · Fondo blanco puro, tipografía Helvetica
+//   · Líneas negras de acento arriba y abajo (gesto Jobs)
+//   · Stats cards con borde sutil
+//   · Filas ordenadas: evaluados de mayor a menor nota, luego pendientes
+//   · Nota coloreada: verde ≥17, azul ≥14, ámbar ≥11, rojo <11
+//   · Cero dependencias externas además de jsPDF
+//
 export const exportarNotasPDF = async (entregas, docenteNombre = '', cursoNombre = '') => {
   const { default: jsPDF } = await import('jspdf');
-  let autoTableOk = true;
-  try {
-    await import('jspdf-autotable');
-  } catch (err) {
-    console.warn('No se pudo cargar jspdf-autotable, se usará un fallback de texto:', err);
-    autoTableOk = false;
-  }
 
-  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-  const fecha = new Date().toLocaleDateString('es-PE');
-  const evaluadas = entregas.filter(e => e.estado === 'evaluado');
-  const promedio = evaluadas.length
-    ? (evaluadas.reduce((s, e) => s + (e.notaFinal || 0), 0) / evaluadas.length).toFixed(1)
-    : '—';
+  // ── Constantes de layout ───────────────────────────────────────────────────
+  const PAGE_W  = 297;
+  const PAGE_H  = 210;
+  const MARGIN  = 16;
+  const ROW_H   = 7;
+  const HEAD_H  = 8.5;
 
-  doc.setFillColor(15, 12, 41);
-  doc.rect(0, 0, 297, 35, 'F');
+  // Anchos de columna: N°|Alumno|Curso|Tipo|Nota|Nivel|Estado|Fecha
+  const COLS = [10, 62, 32, 28, 18, 22, 22, 24];
+  const HDRS = ['N°', 'Alumno', 'Curso', 'Tipo', 'Nota', 'Nivel', 'Estado', 'Fecha'];
 
-  doc.setFillColor(102, 126, 234);
-  doc.rect(0, 35, 297, 1.5, 'F');
+  // ── Paleta Apple ───────────────────────────────────────────────────────────
+  const BLACK  = [10, 10, 10];
+  const G1     = [70, 70, 70];
+  const G2     = [140, 140, 140];
+  const G3     = [210, 210, 210];
+  const G4     = [248, 248, 248];
+  const WHITE  = [255, 255, 255];
+  const BLUE   = [0, 122, 255];
+  const GREEN  = [52, 199, 89];
+  const AMBER  = [255, 149, 0];
+  const RED    = [255, 59, 48];
 
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(18);
-  doc.setTextColor(255, 255, 255);
-  doc.text('EduEval AI — Reporte de Notas', 14, 14);
+  // ── Helpers ────────────────────────────────────────────────────────────────
+  const fc = (d, c) => d.setFillColor(...c);
+  const dc = (d, c) => d.setDrawColor(...c);
+  const tc = (d, c) => d.setTextColor(...c);
 
-  doc.setFontSize(10);
-  doc.setFont('helvetica', 'normal');
-  doc.setTextColor(167, 139, 250);
-  const sub = cursoNombre ? `Curso: ${cursoNombre}` : 'Todos los cursos';
-  doc.text(sub, 14, 22);
+  const clip = (s, maxMm) => {
+    // ~1.9 pts per char at size 7.5
+    const max = Math.floor(maxMm / 1.78);
+    return s.length > max ? s.slice(0, max - 1) + '…' : s;
+  };
 
-  doc.setTextColor(200, 200, 220);
-  doc.setFontSize(9);
-  doc.text(`Docente: ${docenteNombre}`, 297 - 14, 14, { align: 'right' });
-  doc.text(`Fecha: ${fecha}`, 297 - 14, 21, { align: 'right' });
+  const noteColor = (n) =>
+    n >= 17 ? GREEN : n >= 14 ? BLUE : n >= 11 ? AMBER : RED;
 
-  const statsY = 42;
-  const statItems = [
-    { label: 'Total Entregas', value: entregas.length, color: [102, 126, 234] },
-    { label: 'Promedio Clase', value: `${promedio}/20`, color: [34, 197, 94] },
-    { label: 'Aprobados', value: evaluadas.filter(e => e.notaFinal >= 11).length, color: [59, 130, 246] },
-    { label: 'Desaprobados', value: evaluadas.filter(e => e.notaFinal < 11).length, color: [239, 68, 68] },
-  ];
-
-  statItems.forEach((s, i) => {
-    const x = 14 + i * 68;
-    doc.setFillColor(25, 20, 55);
-    doc.roundedRect(x, statsY, 62, 18, 2, 2, 'F');
-    doc.setFontSize(16);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(...s.color);
-    doc.text(String(s.value), x + 31, statsY + 10, { align: 'center' });
-    doc.setFontSize(7);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(150, 140, 180);
-    doc.text(s.label.toUpperCase(), x + 31, statsY + 15, { align: 'center' });
+  // ── Ordenar ────────────────────────────────────────────────────────────────
+  const sorted = [...entregas].sort((a, b) => {
+    if (a.estado === 'evaluado' && b.estado !== 'evaluado') return -1;
+    if (a.estado !== 'evaluado' && b.estado === 'evaluado') return 1;
+    return (b.notaFinal ?? -1) - (a.notaFinal ?? -1);
   });
 
-  const tableData = entregas.map((e, i) => [
-    i + 1,
-    e.alumnoNombre || '—',
-    e.cursoNombre || '—',
-    e.tipoEvaluacion || '—',
-    e.titulo || '—',
-    e.estado === 'evaluado' ? `${e.notaFinal ?? '—'}/20` : '—',
-    e.nivelGlobal || '—',
-    e.estado === 'evaluado' ? 'Evaluado' : 'Pendiente',
-    e.creadoEn?.toDate?.()?.toLocaleDateString('es-PE') || '—',
-  ]);
+  const evaluadas   = sorted.filter(e => e.estado === 'evaluado');
+  const promedio    = evaluadas.length
+    ? (evaluadas.reduce((s, e) => s + (e.notaFinal || 0), 0) / evaluadas.length).toFixed(1)
+    : '—';
+  const aprobados   = evaluadas.filter(e => e.notaFinal >= 11).length;
+  const desaprob    = evaluadas.filter(e => e.notaFinal < 11).length;
+  const fecha       = new Date().toLocaleDateString('es-PE');
 
-  if (autoTableOk && typeof doc.autoTable === 'function') {
-    doc.autoTable({
-      startY: statsY + 24,
-      head: [['N°', 'Alumno', 'Curso', 'Tipo', 'Trabajo', 'Nota', 'Nivel', 'Estado', 'Fecha']],
-      body: tableData,
-      styles: {
-        fontSize: 8,
-        cellPadding: 3,
-        textColor: [220, 215, 240],
-        lineColor: [40, 35, 80],
-        lineWidth: 0.2,
-      },
-      headStyles: {
-        fillColor: [30, 25, 65],
-        textColor: [167, 139, 250],
-        fontStyle: 'bold',
-        fontSize: 8,
-      },
-      alternateRowStyles: { fillColor: [20, 16, 50] },
-      bodyStyles: { fillColor: [15, 12, 41] },
-      columnStyles: {
-        0: { cellWidth: 10, halign: 'center' },
-        1: { cellWidth: 45 },
-        2: { cellWidth: 38 },
-        3: { cellWidth: 28 },
-        4: { cellWidth: 50 },
-        5: { cellWidth: 18, halign: 'center' },
-        6: { cellWidth: 22, halign: 'center' },
-        7: { cellWidth: 22, halign: 'center' },
-        8: { cellWidth: 26, halign: 'center' },
-      },
-      didParseCell(data) {
-        if (data.column.index === 5 && data.section === 'body') {
-          const nota = parseFloat(data.cell.raw);
-          if (!isNaN(nota)) {
-            data.cell.styles.textColor = nota >= 14
-              ? [34, 197, 94]
-              : nota >= 11 ? [245, 158, 11] : [239, 68, 68];
-            data.cell.styles.fontStyle = 'bold';
-          }
-        }
-      },
-      margin: { left: 14, right: 14 },
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+
+  // ── drawHeader: devuelve Y donde empieza la tabla ─────────────────────────
+  const drawHeader = (pg, total) => {
+    // Fondo blanco
+    fc(doc, WHITE); doc.rect(0, 0, PAGE_W, PAGE_H, 'F');
+    // Barra negra superior
+    fc(doc, BLACK); doc.rect(0, 0, PAGE_W, 1.5, 'F');
+
+    if (pg === 1) {
+      // Título
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(24); tc(doc, BLACK);
+      doc.text('EduEval AI', MARGIN, 19);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(10); tc(doc, G1);
+      doc.text('Reporte de Notas', MARGIN, 26);
+
+      // Separador
+      dc(doc, G3); doc.setLineWidth(0.3);
+      doc.line(MARGIN, 29, PAGE_W - MARGIN, 29);
+
+      // Meta (derecha)
+      doc.setFontSize(7.5); tc(doc, G2);
+      doc.text(`Docente: ${docenteNombre}`,                          PAGE_W - MARGIN, 11, { align: 'right' });
+      doc.text(cursoNombre ? `Curso: ${cursoNombre}` : 'Todos los cursos', PAGE_W - MARGIN, 17, { align: 'right' });
+      doc.text(`Fecha: ${fecha}`,                                    PAGE_W - MARGIN, 23, { align: 'right' });
+
+      // Stats cards
+      const SY = 32, CW = 56, CH = 22, GAP = 7;
+      const stats = [
+        { lbl: 'TOTAL ENTREGAS', val: String(entregas.length), col: BLACK },
+        { lbl: 'PROMEDIO CLASE', val: `${promedio}/20`,         col: BLUE  },
+        { lbl: 'APROBADOS',      val: String(aprobados),        col: GREEN },
+        { lbl: 'DESAPROBADOS',   val: String(desaprob),         col: RED   },
+      ];
+      stats.forEach(({ lbl, val, col }, i) => {
+        const x = MARGIN + i * (CW + GAP);
+        fc(doc, G4); dc(doc, G3); doc.setLineWidth(0.2);
+        doc.roundedRect(x, SY, CW, CH, 2, 2, 'FD');
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(15); tc(doc, col);
+        doc.text(val, x + CW / 2, SY + 12, { align: 'center' });
+
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(6); tc(doc, G2);
+        doc.text(lbl, x + CW / 2, SY + 18, { align: 'center' });
+      });
+
+      return SY + CH + 5; // ← Y inicio tabla
+    } else {
+      // Páginas 2+: mini cabecera
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7.5); tc(doc, BLACK);
+      doc.text('EduEval AI — Reporte de Notas', MARGIN, 9);
+
+      doc.setFont('helvetica', 'normal'); tc(doc, G2);
+      doc.text(
+        `${docenteNombre}  ·  ${fecha}  ·  Pág. ${pg}/${total}`,
+        PAGE_W - MARGIN, 9, { align: 'right' }
+      );
+      dc(doc, G3); doc.setLineWidth(0.25);
+      doc.line(MARGIN, 11.5, PAGE_W - MARGIN, 11.5);
+
+      return 14;
+    }
+  };
+
+  // ── drawTableHeader ────────────────────────────────────────────────────────
+  const drawTHead = (y) => {
+    fc(doc, BLACK);
+    doc.rect(MARGIN, y, PAGE_W - MARGIN * 2, HEAD_H, 'F');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6.8); tc(doc, WHITE);
+
+    let x = MARGIN + 2;
+    HDRS.forEach((h, i) => {
+      const center = i === 0 || i >= 4;
+      const cx = center ? x + COLS[i] / 2 : x;
+      doc.text(h, cx, y + HEAD_H - 2, { align: center ? 'center' : 'left' });
+      x += COLS[i];
     });
-  } else {
-    doc.setFontSize(8);
-    doc.setTextColor(220, 215, 240);
-    doc.text('Nota: No se pudo usar jspdf-autotable. Se genera un PDF con tabla simple.', 14, statsY + 24);
-    let y = statsY + 32;
-    const lineHeight = 6;
-    const rows = [
-      ['N°', 'Alumno', 'Curso', 'Tipo', 'Trabajo', 'Nota', 'Nivel', 'Estado', 'Fecha'],
-      ...tableData.map(row => row.map(cell => String(cell).replace(/\s+/g, ' '))),
+    return y + HEAD_H;
+  };
+
+  // ── drawRow ────────────────────────────────────────────────────────────────
+  const drawRow = (entry, ri, y) => {
+    fc(doc, ri % 2 === 0 ? WHITE : G4);
+    doc.rect(MARGIN, y, PAGE_W - MARGIN * 2, ROW_H, 'F');
+
+    dc(doc, G3); doc.setLineWidth(0.12);
+    doc.line(MARGIN, y + ROW_H, PAGE_W - MARGIN + MARGIN, y + ROW_H);
+
+    const ev   = entry.estado === 'evaluado';
+    const nota = entry.notaFinal;
+    const ty   = y + ROW_H - 1.8;
+
+    const cells = [
+      { t: String(ri + 1),                                               center: true,  color: G2,    bold: false },
+      { t: clip(entry.alumnoNombre || '—', COLS[1] - 3),                 center: false, color: BLACK, bold: true  },
+      { t: clip(entry.cursoNombre  || '—', COLS[2] - 3),                 center: false, color: G1,    bold: false },
+      { t: clip(entry.tipoEvaluacion || '—', COLS[3] - 3),               center: false, color: G1,    bold: false },
+      { t: ev ? `${nota}/20` : '—',                                      center: true,  color: ev ? noteColor(nota) : G2, bold: ev },
+      { t: entry.nivelGlobal || '—',                                     center: true,  color: G1,    bold: false },
+      { t: ev ? 'Evaluado' : 'Pendiente',                                center: true,  color: ev ? GREEN : AMBER, bold: false },
+      { t: entry.creadoEn?.toDate?.()?.toLocaleDateString('es-PE') || '—', center: true, color: G2, bold: false },
     ];
 
-    rows.forEach((row, index) => {
-      if (y > 280) {
-        doc.addPage();
-        y = 20;
-      }
-      doc.text(row.join(' | '), 14, y, { maxWidth: 269 });
-      y += lineHeight;
+    doc.setFontSize(7.2);
+    let x = MARGIN + 2;
+    cells.forEach((c, i) => {
+      doc.setFont('helvetica', c.bold ? 'bold' : 'normal');
+      tc(doc, c.color);
+      const cx = c.center ? x + COLS[i] / 2 : x;
+      doc.text(c.t, cx, ty, { align: c.center ? 'center' : 'left' });
+      x += COLS[i];
     });
+  };
+
+  // ── drawFooter ─────────────────────────────────────────────────────────────
+  const drawFooter = (pg, total) => {
+    const fy = PAGE_H - 9;
+    dc(doc, G3); doc.setLineWidth(0.2);
+    doc.line(MARGIN, fy - 1, PAGE_W - MARGIN, fy - 1);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6); tc(doc, G2);
+    doc.text(`EduEval AI  ·  ${fecha}  ·  ${docenteNombre}`, MARGIN, fy + 3);
+    doc.text(`Página ${pg} de ${total}`, PAGE_W - MARGIN, fy + 3, { align: 'right' });
+
+    // Barra negra inferior
+    fc(doc, BLACK);
+    doc.rect(0, PAGE_H - 1.5, PAGE_W, 1.5, 'F');
+  };
+
+  // ── Estimar páginas ────────────────────────────────────────────────────────
+  const firstTableY = 63;
+  const rpp1  = Math.floor((PAGE_H - firstTableY - 14 - HEAD_H) / ROW_H);
+  const rppN  = Math.floor((PAGE_H - 14 - 14 - HEAD_H) / ROW_H);
+  let totalPg = 1;
+  if (sorted.length > rpp1) {
+    totalPg += Math.ceil((sorted.length - rpp1) / rppN);
   }
 
-  const pageCount = doc.internal.getNumberOfPages();
-  for (let i = 1; i <= pageCount; i++) {
-    doc.setPage(i);
-    doc.setFillColor(15, 12, 41);
-    doc.rect(0, doc.internal.pageSize.height - 10, 297, 10, 'F');
-    doc.setFontSize(7);
-    doc.setTextColor(100, 90, 140);
-    doc.text(
-      `EduEval AI — Generado el ${fecha} por ${docenteNombre}`,
-      14, doc.internal.pageSize.height - 3
-    );
-    doc.text(
-      `Página ${i} de ${pageCount}`,
-      297 - 14, doc.internal.pageSize.height - 3,
-      { align: 'right' }
-    );
+  // ── Renderizar ─────────────────────────────────────────────────────────────
+  let pg   = 1;
+  let tY   = drawHeader(pg, totalPg);
+  let y    = drawTHead(tY);
+  let ri   = 0;
+
+  for (const entry of sorted) {
+    if (y + ROW_H > PAGE_H - 12) {
+      drawFooter(pg, totalPg);
+      doc.addPage();
+      pg++;
+      tY = drawHeader(pg, totalPg);
+      y  = drawTHead(tY);
+    }
+    drawRow(entry, ri, y);
+    y  += ROW_H;
+    ri++;
   }
 
-  const nombreArchivo = `EduEval_Notas_${(cursoNombre || 'General').replace(/\s+/g, '_')}_${fecha.replace(/\//g, '-')}.pdf`;
-  doc.save(nombreArchivo);
+  // ── Resumen final ──────────────────────────────────────────────────────────
+  const SH = 16;
+  if (y + SH + 14 > PAGE_H) {
+    drawFooter(pg, totalPg);
+    doc.addPage(); pg++;
+    tY = drawHeader(pg, totalPg);
+    y  = tY + 4;
+  } else {
+    y += 5;
+  }
+
+  fc(doc, G4); dc(doc, G3); doc.setLineWidth(0.2);
+  doc.roundedRect(MARGIN, y, PAGE_W - MARGIN * 2, SH, 2, 2, 'FD');
+
+  const sums = [
+    { lbl: 'TOTAL',        val: String(entregas.length), col: BLACK },
+    { lbl: 'PROMEDIO',     val: `${promedio}/20`,        col: BLUE  },
+    { lbl: 'APROBADOS',    val: String(aprobados),       col: GREEN },
+    { lbl: 'DESAPROBADOS', val: String(desaprob),        col: RED   },
+  ];
+  const cw = (PAGE_W - MARGIN * 2) / sums.length;
+  sums.forEach(({ lbl, val, col }, i) => {
+    const cx = MARGIN + i * cw + cw / 2;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11); tc(doc, col);
+    doc.text(val, cx, y + 9, { align: 'center' });
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6); tc(doc, G2);
+    doc.text(lbl, cx, y + 13.5, { align: 'center' });
+  });
+
+  drawFooter(pg, totalPg);
+
+  const file = `EduEval_Notas_${(cursoNombre || 'General').replace(/\s+/g, '_')}_${fecha.replace(/\//g, '-')}.pdf`;
+  doc.save(file);
 };
