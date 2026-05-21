@@ -8,7 +8,7 @@ import {
   crearActividad, getActividadesByCurso, eliminarActividad,
   getEntregasByCurso, eliminarEntrega,
   getRubricas,
-  actualizarEntregaAlumno, // ← para editar nota
+  actualizarEntregaAlumno,
   actualizarActividad,
 } from '../firebase/services.js';
 import { useAuth } from '../components/AuthContext.jsx';
@@ -53,8 +53,9 @@ export default function GestionCursos() {
   const [entregaDetalle, setEntregaDetalle] = useState(null);
   const [filtroAlumno, setFiltroAlumno] = useState('');
   const [filtroTipo, setFiltroTipo] = useState('');
+  const [gruposExpandidos, setGruposExpandidos] = useState({});
 
-  // ── Edición de nota por docente ──────────────────────────────────────────
+  // Edición de nota
   const [editandoNota, setEditandoNota] = useState(false);
   const [notaEditada, setNotaEditada] = useState('');
   const [comentarioDocente, setComentarioDocente] = useState('');
@@ -122,12 +123,7 @@ export default function GestionCursos() {
     setEditingActividadId(a.id);
     setEditFecha(a.fechaLimite || '');
   };
-
-  const handleCancelarEditar = () => {
-    setEditingActividadId(null);
-    setEditFecha('');
-  };
-
+  const handleCancelarEditar = () => { setEditingActividadId(null); setEditFecha(''); };
   const handleGuardarFecha = async () => {
     if (!editingActividadId) return;
     try {
@@ -139,19 +135,14 @@ export default function GestionCursos() {
       setEditingActividadId(null);
       setEditFecha('');
     } catch (err) {
-      console.error(err);
       setMsgAct('❌ ' + (err.message || 'Error actualizando fecha'));
-    } finally {
-      setGuardandoAct(false);
-    }
+    } finally { setGuardandoAct(false); }
   };
 
-  // ── Guardar nota editada por docente ──────────────────────────────────────
   const handleGuardarNota = async () => {
     const nota = parseFloat(notaEditada);
-    if (isNaN(nota) || nota < 0 || nota > 20) {
+    if (isNaN(nota) || nota < 0 || nota > 20)
       return setMsgNota('❌ La nota debe ser un número entre 0 y 20');
-    }
     setGuardandoNota(true); setMsgNota('');
     try {
       const porcentaje = Math.round((nota / 20) * 100);
@@ -159,56 +150,38 @@ export default function GestionCursos() {
       if (nota >= 17) nivelGlobal = 'Excelente';
       else if (nota >= 14) nivelGlobal = 'Bueno';
       else if (nota >= 11) nivelGlobal = 'Regular';
-
       await actualizarEntregaAlumno(entregaDetalle.id, {
-        notaFinal: nota,
-        porcentaje,
-        nivelGlobal,
+        notaFinal: nota, porcentaje, nivelGlobal,
         notaEditadaManualmente: true,
         comentarioDocente: comentarioDocente.trim(),
         estado: 'evaluado',
       });
-
-      // Actualizar en local
-      const entregaActualizada = {
-        ...entregaDetalle,
-        notaFinal: nota,
-        porcentaje,
-        nivelGlobal,
-        notaEditadaManualmente: true,
-        comentarioDocente: comentarioDocente.trim(),
-        estado: 'evaluado',
-      };
+      const entregaActualizada = { ...entregaDetalle, notaFinal: nota, porcentaje, nivelGlobal, notaEditadaManualmente: true, comentarioDocente: comentarioDocente.trim(), estado: 'evaluado' };
       setEntregaDetalle(entregaActualizada);
       const ents = await getEntregasByCurso(cursoEntregas.id);
       setEntregas(ents);
       setMsgNota('✅ Nota guardada correctamente');
       setEditandoNota(false);
-    } catch (err) {
-      setMsgNota('❌ Error al guardar: ' + err.message);
-    } finally {
-      setGuardandoNota(false);
-    }
+    } catch (err) { setMsgNota('❌ Error al guardar: ' + err.message); }
+    finally { setGuardandoNota(false); }
   };
 
   const abrirEditarNota = () => {
     setNotaEditada(String(entregaDetalle.notaFinal ?? ''));
     setComentarioDocente(entregaDetalle.comentarioDocente || '');
-    setMsgNota('');
-    setEditandoNota(true);
+    setMsgNota(''); setEditandoNota(true);
   };
 
-  // ── Abrir entregas del curso ───────────────────────────────────────────────
   const abrirEntregas = async (curso) => {
     setCursoEntregas(curso);
-    setFiltroAlumno(''); setFiltroTipo(''); setEntregaDetalle(null);
-    setEditandoNota(false); setMsgNota('');
+    setFiltroAlumno(''); setFiltroTipo('');
+    setEntregaDetalle(null); setEditandoNota(false); setMsgNota('');
+    setGruposExpandidos({});
     const ents = await getEntregasByCurso(curso.id);
     ents.sort((a, b) => (b.creadoEn?.seconds || 0) - (a.creadoEn?.seconds || 0));
     setEntregas(ents);
   };
 
-  // ── Actividades ────────────────────────────────────────────────────────────
   const abrirActividades = async (curso) => {
     setCursoActividades(curso);
     setShowActForm(false); setMsgAct('');
@@ -318,17 +291,48 @@ export default function GestionCursos() {
     return '#ef4444';
   };
 
-  // Visor según tipo de archivo
   const esDocxArchivo = (nombre) => nombre?.toLowerCase().endsWith('.docx');
 
+  // ── Agrupación de entregas por tema ──────────────────────────────────────────
+  // Clave de grupo: actividadTitulo si existe, si no el titulo de la entrega,
+  // si no "Sin tema". Dentro de cada grupo: ordenar por nota desc.
   const entregasFiltradas = entregas.filter(e => {
     const matchAlumno = !filtroAlumno || e.alumnoNombre?.toLowerCase().includes(filtroAlumno.toLowerCase());
     const matchTipo = !filtroTipo || e.tipoEvaluacion === filtroTipo;
     return matchAlumno && matchTipo;
   });
 
-  const alumnosUnicos = [...new Set(entregas.map(e => e.alumnoNombre).filter(Boolean))];
+  // Construir grupos ordenados
+  const gruposMap = {};
+  entregasFiltradas.forEach(e => {
+    const key = e.actividadTitulo?.trim() || e.titulo?.trim() || 'Sin tema';
+    if (!gruposMap[key]) gruposMap[key] = [];
+    gruposMap[key].push(e);
+  });
+  // Dentro de cada grupo, ordenar: evaluados de mayor a menor nota, luego pendientes
+  Object.keys(gruposMap).forEach(key => {
+    gruposMap[key].sort((a, b) => {
+      if (a.estado === 'evaluado' && b.estado !== 'evaluado') return -1;
+      if (a.estado !== 'evaluado' && b.estado === 'evaluado') return 1;
+      return (b.notaFinal ?? -1) - (a.notaFinal ?? -1);
+    });
+  });
+  // Ordenar grupos: el que tiene más entregas primero
+  const grupos = Object.entries(gruposMap).sort((a, b) => b[1].length - a[1].length);
+
+  const toggleGrupo = (key) =>
+    setGruposExpandidos(prev => ({ ...prev, [key]: !prev[key] }));
+
   const tiposUnicos = [...new Set(entregas.map(e => e.tipoEvaluacion).filter(Boolean))];
+
+  // Stats por grupo
+  const grupoStats = (items) => {
+    const ev = items.filter(e => e.estado === 'evaluado');
+    const prom = ev.length
+      ? (ev.reduce((s, e) => s + (e.notaFinal || 0), 0) / ev.length).toFixed(1)
+      : null;
+    return { total: items.length, evaluados: ev.length, promedio: prom };
+  };
 
   return (
     <div style={s.container}>
@@ -367,15 +371,9 @@ export default function GestionCursos() {
               <p style={s.infoValue}>Código: <strong style={{ color: '#a78bfa' }}>{c.codigo}</strong> + nombre del profesor</p>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px' }}>
-              <button style={s.entregasBtn} onClick={() => abrirEntregas(c)}>
-                📋 Ver entregas de alumnos
-              </button>
-              <button style={s.actividadesBtn} onClick={() => abrirActividades(c)}>
-                📝 Actividades y enunciados
-              </button>
-              <button style={s.solicitudesBtn} onClick={() => abrirSolicitudes(c)}>
-                👥 Ver alumnos y solicitudes
-              </button>
+              <button style={s.entregasBtn} onClick={() => abrirEntregas(c)}>📋 Ver entregas de alumnos</button>
+              <button style={s.actividadesBtn} onClick={() => abrirActividades(c)}>📝 Actividades y enunciados</button>
+              <button style={s.solicitudesBtn} onClick={() => abrirSolicitudes(c)}>👥 Ver alumnos y solicitudes</button>
             </div>
           </div>
         ))}
@@ -392,9 +390,7 @@ export default function GestionCursos() {
           <div style={{ ...s.modal, maxWidth: '420px', textAlign: 'center' }}>
             <p style={{ fontSize: '40px', margin: '0 0 12px' }}>⚠️</p>
             <h3 style={{ color: '#fff', fontSize: '18px', margin: '0 0 8px' }}>
-              {confirm.tipo === 'alumno' ? 'Eliminar alumno' :
-               confirm.tipo === 'actividad' ? 'Eliminar actividad' :
-               confirm.tipo === 'entrega' ? 'Eliminar entrega' : 'Eliminar curso'}
+              {confirm.tipo === 'alumno' ? 'Eliminar alumno' : confirm.tipo === 'actividad' ? 'Eliminar actividad' : confirm.tipo === 'entrega' ? 'Eliminar entrega' : 'Eliminar curso'}
             </h3>
             <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '14px', margin: '0 0 24px', lineHeight: '1.5' }}>
               ¿Eliminar <strong style={{ color: '#fff' }}>"{confirm.nombre}"</strong>? Esta acción no se puede deshacer.
@@ -407,94 +403,159 @@ export default function GestionCursos() {
         </div>
       )}
 
-      {/* ── Modal entregas de alumnos ── */}
+      {/* ── Modal entregas agrupadas por tema ── */}
       {cursoEntregas && !entregaDetalle && (
         <div style={s.overlay}>
-          <div style={{ ...s.modal, maxWidth: '900px' }}>
+          <div style={{ ...s.modal, maxWidth: '920px' }}>
             <div style={s.modalHeader}>
               <div>
                 <h2 style={s.modalTitle}>📋 Entregas — {cursoEntregas.nombre}</h2>
                 <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '13px', margin: 0 }}>
-                  Sección {cursoEntregas.seccion} · {cursoEntregas.ciclo} · {entregas.length} entrega{entregas.length !== 1 ? 's' : ''}
+                  Sección {cursoEntregas.seccion} · {cursoEntregas.ciclo} · {entregas.length} entrega{entregas.length !== 1 ? 's' : ''} · {grupos.length} tema{grupos.length !== 1 ? 's' : ''}
                 </p>
               </div>
               <button style={s.closeBtn} onClick={() => setCursoEntregas(null)}>✕</button>
             </div>
 
-            <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
-              <input style={{ ...s.input, flex: 1, minWidth: '160px' }}
+            {/* Filtros */}
+            <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', flexWrap: 'wrap' }}>
+              <input
+                style={{ ...s.input, flex: 1, minWidth: '160px' }}
                 placeholder="🔍 Buscar alumno..."
                 value={filtroAlumno}
-                onChange={e => setFiltroAlumno(e.target.value)} />
+                onChange={e => setFiltroAlumno(e.target.value)}
+              />
               <select style={{ ...s.select, width: '180px' }} value={filtroTipo}
                 onChange={e => setFiltroTipo(e.target.value)}>
                 <option value="">Todos los tipos</option>
                 {tiposUnicos.map(t => <option key={t} value={t}>{t}</option>)}
               </select>
+              {grupos.length > 1 && (
+                <button style={s.secondaryBtn}
+                  onClick={() => {
+                    const allExpanded = grupos.every(([k]) => gruposExpandidos[k] !== false);
+                    const next = {};
+                    grupos.forEach(([k]) => { next[k] = !allExpanded; });
+                    setGruposExpandidos(next);
+                  }}>
+                  {grupos.every(([k]) => gruposExpandidos[k] !== false) ? '⊖ Colapsar todo' : '⊕ Expandir todo'}
+                </button>
+              )}
             </div>
 
-            {entregasFiltradas.length === 0 ? (
+            {grupos.length === 0 ? (
               <p style={{ color: 'rgba(255,255,255,0.3)', textAlign: 'center', padding: '40px' }}>
                 No hay entregas{filtroAlumno || filtroTipo ? ' con ese filtro' : ' aún'}
               </p>
             ) : (
-              <div style={{ overflowX: 'auto' }}>
-                <table style={s.table}>
-                  <thead>
-                    <tr>
-                      {['Alumno', 'Trabajo', 'Tipo', 'Nota', 'Nivel', 'Archivo', 'Fecha', ''].map(h => (
-                        <th key={h} style={s.th}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {entregasFiltradas.map((e, i) => (
-                      <tr key={i} style={{ ...s.tr, cursor: 'pointer' }}
-                        onClick={() => { setEntregaDetalle(e); setEditandoNota(false); setMsgNota(''); }}>
-                        <td style={s.td}>
-                          <span style={{ color: '#fff', fontWeight: '500' }}>{e.alumnoNombre || '—'}</span>
-                        </td>
-                        <td style={s.td}>
-                          <span style={{ maxWidth: '160px', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {e.titulo || '—'}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '60vh', overflowY: 'auto', paddingRight: '4px' }}>
+                {grupos.map(([tema, items]) => {
+                  const expandido = gruposExpandidos[tema] !== false; // por defecto expandido
+                  const stats = grupoStats(items);
+                  const promColor = stats.promedio
+                    ? parseFloat(stats.promedio) >= 14 ? '#22c55e'
+                      : parseFloat(stats.promedio) >= 11 ? '#f59e0b' : '#ef4444'
+                    : 'rgba(255,255,255,0.3)';
+
+                  return (
+                    <div key={tema} style={s.grupoCard}>
+                      {/* Cabecera del grupo — clickable */}
+                      <button
+                        style={s.grupoHeader}
+                        onClick={() => toggleGrupo(tema)}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: 0 }}>
+                          <span style={{ fontSize: '16px' }}>{expandido ? '▾' : '▸'}</span>
+                          <span style={{ color: '#fff', fontWeight: '700', fontSize: '14px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {tema}
                           </span>
-                        </td>
-                        <td style={s.td}>
-                          <span style={s.tipoBadge}>{e.tipoEvaluacion || '—'}</span>
-                        </td>
-                        <td style={s.td}>
-                          {e.estado === 'evaluado' ? (
-                            <span style={{
-                              ...s.badge,
-                              background: e.notaFinal >= 14 ? '#22c55e33' : e.notaFinal >= 11 ? '#f59e0b33' : '#ef444433',
-                              color: e.notaFinal >= 14 ? '#22c55e' : e.notaFinal >= 11 ? '#f59e0b' : '#ef4444',
-                            }}>
-                              {e.notaFinal}/20
-                              {e.notaEditadaManualmente && ' ✏️'}
-                            </span>
-                          ) : (
-                            <span style={{ color: '#f59e0b', fontSize: '12px' }}>⏳ Pendiente</span>
+                          <span style={s.tipoBadge}>{items[0]?.tipoEvaluacion || '—'}</span>
+                        </div>
+                        <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flexShrink: 0 }}>
+                          {stats.promedio && (
+                            <div style={{ textAlign: 'center' }}>
+                              <div style={{ color: promColor, fontWeight: '700', fontSize: '15px' }}>{stats.promedio}/20</div>
+                              <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '10px' }}>promedio</div>
+                            </div>
                           )}
-                        </td>
-                        <td style={s.td}>{e.nivelGlobal || '—'}</td>
-                        <td style={s.td}>
-                          {e.archivoNombre ? (
-                            <span style={{ color: '#a78bfa', fontSize: '11px' }}>
-                              {e.archivoNombre.toLowerCase().endsWith('.docx') ? '📝' : '📄'} {e.archivoNombre}
-                            </span>
-                          ) : '—'}
-                        </td>
-                        <td style={s.td}>
-                          {e.creadoEn?.toDate?.()?.toLocaleDateString('es-PE') || '—'}
-                        </td>
-                        <td style={s.td} onClick={ev => ev.stopPropagation()}>
-                          <button style={s.expulsarBtn} title="Eliminar entrega"
-                            onClick={() => handleEliminarEntregaDocente(e)}>🗑</button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                          <div style={{ textAlign: 'center' }}>
+                            <div style={{ color: '#a78bfa', fontWeight: '700', fontSize: '15px' }}>{stats.evaluados}/{stats.total}</div>
+                            <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '10px' }}>evaluados</div>
+                          </div>
+                        </div>
+                      </button>
+
+                      {/* Filas del grupo */}
+                      {expandido && (
+                        <div style={{ overflowX: 'auto' }}>
+                          <table style={{ ...s.table, marginTop: '2px' }}>
+                            <thead>
+                              <tr>
+                                {['#', 'Alumno', 'Nota', 'Nivel', 'Archivo', 'Fecha', ''].map(h => (
+                                  <th key={h} style={s.th}>{h}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {items.map((e, i) => (
+                                <tr key={e.id || i}
+                                  style={{ ...s.tr, cursor: 'pointer' }}
+                                  onClick={() => { setEntregaDetalle(e); setEditandoNota(false); setMsgNota(''); }}>
+                                  <td style={{ ...s.td, width: '32px', color: 'rgba(255,255,255,0.3)', fontWeight: '600' }}>
+                                    {i + 1}
+                                  </td>
+                                  <td style={s.td}>
+                                    <span style={{ color: '#fff', fontWeight: '600', fontSize: '13px' }}>
+                                      {e.alumnoNombre || '—'}
+                                    </span>
+                                  </td>
+                                  <td style={s.td}>
+                                    {e.estado === 'evaluado' ? (
+                                      <span style={{
+                                        ...s.badge,
+                                        background: e.notaFinal >= 14 ? '#22c55e22' : e.notaFinal >= 11 ? '#f59e0b22' : '#ef444422',
+                                        color: e.notaFinal >= 14 ? '#22c55e' : e.notaFinal >= 11 ? '#f59e0b' : '#ef4444',
+                                      }}>
+                                        {e.notaFinal}/20{e.notaEditadaManualmente ? ' ✏️' : ''}
+                                      </span>
+                                    ) : (
+                                      <span style={{ color: '#f59e0b', fontSize: '12px' }}>⏳ Pendiente</span>
+                                    )}
+                                  </td>
+                                  <td style={s.td}>
+                                    <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px' }}>
+                                      {e.nivelGlobal || '—'}
+                                    </span>
+                                  </td>
+                                  <td style={s.td}>
+                                    {e.archivoUrl ? (
+                                      <a href={e.archivoUrl} target="_blank" rel="noreferrer"
+                                        onClick={ev => ev.stopPropagation()}
+                                        style={{ color: '#a78bfa', fontSize: '11px', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '4px', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                        {e.archivoNombre?.toLowerCase().endsWith('.docx') ? '📝' : '📄'} {e.archivoNombre || 'Ver archivo'}
+                                      </a>
+                                    ) : e.archivoNombre ? (
+                                      <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px' }}>📄 {e.archivoNombre}</span>
+                                    ) : '—'}
+                                  </td>
+                                  <td style={{ ...s.td, whiteSpace: 'nowrap' }}>
+                                    <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '12px' }}>
+                                      {e.creadoEn?.toDate?.()?.toLocaleDateString('es-PE') || '—'}
+                                    </span>
+                                  </td>
+                                  <td style={s.td} onClick={ev => ev.stopPropagation()}>
+                                    <button style={s.expulsarBtn} title="Eliminar entrega"
+                                      onClick={() => handleEliminarEntregaDocente(e)}>🗑</button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
 
@@ -518,8 +579,7 @@ export default function GestionCursos() {
                 </p>
               </div>
               <div style={{ display: 'flex', gap: '8px' }}>
-                <button style={s.expulsarBtn} title="Eliminar entrega"
-                  onClick={() => handleEliminarEntregaDocente(entregaDetalle)}>🗑</button>
+                <button style={s.expulsarBtn} title="Eliminar entrega" onClick={() => handleEliminarEntregaDocente(entregaDetalle)}>🗑</button>
                 <button style={s.closeBtn} onClick={() => setEntregaDetalle(null)}>✕</button>
               </div>
             </div>
@@ -556,38 +616,25 @@ export default function GestionCursos() {
                 </div>
               ) : (
                 <div>
-                  <p style={{ color: '#a78bfa', fontSize: '13px', fontWeight: '600', margin: '0 0 12px' }}>
-                    ✏️ Editar nota del alumno
-                  </p>
+                  <p style={{ color: '#a78bfa', fontSize: '13px', fontWeight: '600', margin: '0 0 12px' }}>✏️ Editar nota del alumno</p>
                   <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: '12px' }}>
                     <div>
-                      <label style={{ ...s.labelSmall }}>Nueva nota (0–20)</label>
-                      <input
-                        style={{ ...s.input, width: '100px', fontSize: '18px', fontWeight: '700', textAlign: 'center' }}
+                      <label style={s.labelSmall}>Nueva nota (0–20)</label>
+                      <input style={{ ...s.input, width: '100px', fontSize: '18px', fontWeight: '700', textAlign: 'center' }}
                         type="number" min="0" max="20" step="0.5"
-                        value={notaEditada}
-                        onChange={e => setNotaEditada(e.target.value)}
-                      />
+                        value={notaEditada} onChange={e => setNotaEditada(e.target.value)} />
                     </div>
                     <div style={{ flex: 1 }}>
                       <label style={s.labelSmall}>Comentario para el alumno (opcional)</label>
-                      <input
-                        style={s.input}
-                        placeholder="Ej: Revisión manual por ausencia de firma..."
-                        value={comentarioDocente}
-                        onChange={e => setComentarioDocente(e.target.value)}
-                      />
+                      <input style={s.input} placeholder="Ej: Revisión manual por ausencia de firma..."
+                        value={comentarioDocente} onChange={e => setComentarioDocente(e.target.value)} />
                     </div>
                   </div>
                   {msgNota && (
-                    <p style={{ color: msgNota.includes('✅') ? '#22c55e' : '#ef4444', fontSize: '13px', margin: '0 0 10px' }}>
-                      {msgNota}
-                    </p>
+                    <p style={{ color: msgNota.includes('✅') ? '#22c55e' : '#ef4444', fontSize: '13px', margin: '0 0 10px' }}>{msgNota}</p>
                   )}
                   <div style={{ display: 'flex', gap: '10px' }}>
-                    <button style={s.secondaryBtn} onClick={() => { setEditandoNota(false); setMsgNota(''); }}>
-                      Cancelar
-                    </button>
+                    <button style={s.secondaryBtn} onClick={() => { setEditandoNota(false); setMsgNota(''); }}>Cancelar</button>
                     <button style={s.primaryBtn} onClick={handleGuardarNota} disabled={guardandoNota}>
                       {guardandoNota ? 'Guardando...' : '💾 Guardar nota'}
                     </button>
@@ -629,68 +676,39 @@ export default function GestionCursos() {
               </div>
             )}
 
-            {/* ── Trabajo del alumno — visor ── */}
+            {/* Visor trabajo */}
             <div style={s.trabajoBox}>
-              <div style={{ marginBottom: '12px' }}>
-                <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', margin: 0 }}>
-                  📄 Trabajo entregado
-                </p>
-              </div>
-
+              <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 12px' }}>📄 Trabajo entregado</p>
               {entregaDetalle.archivoUrl ? (
                 <div>
-                  {/* Botones de descarga / abrir */}
                   <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginBottom: '10px' }}>
-                    <a
-                      href={entregaDetalle.archivoUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      style={{ color: '#a78bfa', fontSize: '13px', fontWeight: '600', textDecoration: 'none', background: 'rgba(167,139,250,0.12)', border: '1px solid rgba(167,139,250,0.3)', padding: '6px 14px', borderRadius: '8px' }}
-                    >
+                    <a href={entregaDetalle.archivoUrl} target="_blank" rel="noreferrer"
+                      style={{ color: '#a78bfa', fontSize: '13px', fontWeight: '600', textDecoration: 'none', background: 'rgba(167,139,250,0.12)', border: '1px solid rgba(167,139,250,0.3)', padding: '6px 14px', borderRadius: '8px' }}>
                       🔗 Abrir en pestaña
                     </a>
-                    <a
-                      href={entregaDetalle.archivoUrl}
-                      download={entregaDetalle.archivoNombre}
-                      style={{ color: '#22c55e', fontSize: '13px', fontWeight: '600', textDecoration: 'none', background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.3)', padding: '6px 14px', borderRadius: '8px' }}
-                    >
+                    <a href={entregaDetalle.archivoUrl} download={entregaDetalle.archivoNombre}
+                      style={{ color: '#22c55e', fontSize: '13px', fontWeight: '600', textDecoration: 'none', background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.3)', padding: '6px 14px', borderRadius: '8px' }}>
                       ⬇ Descargar
                     </a>
                   </div>
-
                   {esDocxArchivo(entregaDetalle.archivoNombre) ? (
-                    /* DOCX → Google Docs viewer */
-                    <iframe
-                      key={entregaDetalle.id}
-                      title="Trabajo alumno"
+                    <iframe key={entregaDetalle.id} title="Trabajo alumno"
                       src={`https://docs.google.com/gview?url=${encodeURIComponent(entregaDetalle.archivoUrl)}&embedded=true`}
-                      style={{ width: '100%', height: '560px', border: 'none', borderRadius: '10px', background: '#fff' }}
-                      allowFullScreen
-                    />
+                      style={{ width: '100%', height: '560px', border: 'none', borderRadius: '10px', background: '#fff' }} allowFullScreen />
                   ) : (
-                    /* PDF → embebido directo (CORS ya configurado en Firebase) */
-                    <object
-                      key={entregaDetalle.id}
+                    <object key={entregaDetalle.id}
                       data={`${entregaDetalle.archivoUrl}#toolbar=1&navpanes=0`}
                       type="application/pdf"
-                      style={{ width: '100%', height: '560px', borderRadius: '10px', border: 'none' }}
-                    >
+                      style={{ width: '100%', height: '560px', borderRadius: '10px', border: 'none' }}>
                       <div style={{ padding: '32px', textAlign: 'center' }}>
-                        <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '14px', marginBottom: '12px' }}>
-                          El navegador no puede mostrar el PDF aquí.
-                        </p>
-                        <a href={entregaDetalle.archivoUrl} target="_blank" rel="noreferrer"
-                          style={{ color: '#a78bfa', fontWeight: '600' }}>
-                          📄 Abrir PDF en nueva pestaña →
-                        </a>
+                        <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '14px', marginBottom: '12px' }}>El navegador no puede mostrar el PDF aquí.</p>
+                        <a href={entregaDetalle.archivoUrl} target="_blank" rel="noreferrer" style={{ color: '#a78bfa', fontWeight: '600' }}>📄 Abrir PDF en nueva pestaña →</a>
                       </div>
                     </object>
                   )}
                 </div>
               ) : entregaDetalle.texto ? (
-                <div style={s.textoTrabajo}>
-                  {entregaDetalle.texto}
-                </div>
+                <div style={s.textoTrabajo}>{entregaDetalle.texto}</div>
               ) : (
                 <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '13px' }}>Sin contenido disponible</p>
               )}
@@ -817,10 +835,9 @@ export default function GestionCursos() {
                       {editingActividadId === a.id ? (
                         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                           <input type="datetime-local" style={{ ...s.input, padding: '6px 8px', height: '36px' }}
-                            value={editFecha}
-                            onChange={e => setEditFecha(e.target.value)} />
+                            value={editFecha} onChange={e => setEditFecha(e.target.value)} />
                           <button style={s.primaryBtn} disabled={guardandoAct} onClick={handleGuardarFecha}>Guardar</button>
-                          <button style={s.ghostBtn} onClick={handleCancelarEditar}>Cancelar</button>
+                          <button style={s.secondaryBtn} onClick={handleCancelarEditar}>Cancelar</button>
                         </div>
                       ) : (
                         <div style={{ display: 'flex', gap: '8px' }}>
@@ -867,11 +884,8 @@ export default function GestionCursos() {
                   <div>
                     <label style={s.label}>📅 Fecha límite de entrega</label>
                     <input style={s.input} type="datetime-local"
-                      value={formAct.fechaLimite}
-                      onChange={e => setFormAct(f => ({ ...f, fechaLimite: e.target.value }))} />
-                    <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px', marginTop: '4px' }}>
-                      Los alumnos verán cuánto tiempo les queda
-                    </p>
+                      value={formAct.fechaLimite} onChange={e => setFormAct(f => ({ ...f, fechaLimite: e.target.value }))} />
+                    <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px', marginTop: '4px' }}>Los alumnos verán cuánto tiempo les queda</p>
                   </div>
                 </div>
                 <div style={s.enunciadoBox}>
@@ -1054,10 +1068,10 @@ const s = {
   enunciadoBox: { background: 'rgba(102,126,234,0.06)', border: '1px solid rgba(102,126,234,0.15)', borderRadius: '12px', padding: '16px', marginBottom: '16px' },
   textarea: { width: '100%', padding: '12px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.04)', color: '#fff', fontSize: '13px', outline: 'none', resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box', lineHeight: '1.5' },
   table: { width: '100%', borderCollapse: 'collapse' },
-  th: { color: 'rgba(255,255,255,0.4)', fontSize: '11px', fontWeight: '600', textAlign: 'left', padding: '8px 12px', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.06)' },
+  th: { color: 'rgba(255,255,255,0.35)', fontSize: '10px', fontWeight: '600', textAlign: 'left', padding: '6px 10px', textTransform: 'uppercase', letterSpacing: '0.06em', borderBottom: '1px solid rgba(255,255,255,0.06)' },
   tr: { borderBottom: '1px solid rgba(255,255,255,0.04)' },
-  td: { color: 'rgba(255,255,255,0.8)', fontSize: '13px', padding: '12px' },
-  badge: { padding: '4px 10px', borderRadius: '8px', fontSize: '13px', fontWeight: '600' },
+  td: { color: 'rgba(255,255,255,0.8)', fontSize: '13px', padding: '10px 10px' },
+  badge: { padding: '3px 10px', borderRadius: '8px', fontSize: '12px', fontWeight: '700' },
   trabajoBox: { background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', padding: '16px' },
   textoTrabajo: { color: 'rgba(255,255,255,0.7)', fontSize: '13px', lineHeight: '1.7', whiteSpace: 'pre-wrap', maxHeight: '400px', overflowY: 'auto', padding: '4px' },
   grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' },
@@ -1071,4 +1085,7 @@ const s = {
   tipoRow: { display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '10px' },
   removeBtn: { background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.2)', color: '#ef4444', borderRadius: '8px', cursor: 'pointer', padding: '8px 10px', fontSize: '13px' },
   addTipoBtn: { width: '100%', padding: '10px', borderRadius: '10px', border: '2px dashed rgba(102,126,234,0.3)', background: 'transparent', color: '#a78bfa', cursor: 'pointer', fontSize: '13px' },
+  // ── Nuevos: grupos de entregas ──
+  grupoCard: { background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(102,126,234,0.15)', borderRadius: '14px', overflow: 'hidden' },
+  grupoHeader: { width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px', background: 'rgba(102,126,234,0.08)', border: 'none', cursor: 'pointer', gap: '12px', textAlign: 'left' },
 };
