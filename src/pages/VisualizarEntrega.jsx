@@ -1,7 +1,7 @@
 // src/pages/VisualizarEntrega.jsx
 import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { getEntregasByCurso, editarNotaEntrega } from '../firebase/services.js';
+import { editarNotaEntrega, checkIAWithTurnitin } from '../firebase/services.js';
 import { useAuth } from '../components/AuthContext.jsx';
 
 export default function VisualizarEntrega() {
@@ -16,6 +16,7 @@ export default function VisualizarEntrega() {
   const [comentario, setComentario] = useState('');
   const [enviando, setEnviando] = useState(false);
   const [mensaje, setMensaje] = useState('');
+  const [iaChecking, setIaChecking] = useState(false);
 
   useEffect(() => {
     cargar();
@@ -169,6 +170,40 @@ export default function VisualizarEntrega() {
               </div>
             )}
 
+            {/* IA Check */}
+            <div style={{ marginTop: '16px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+              {entrega.iaScore !== undefined && (
+                <div style={{ padding: '8px 12px', background: 'rgba(255,255,255,0.04)', borderRadius: '8px', color: '#fff', fontWeight: '600' }}>
+                  🔍 IA: {entrega.iaScore}%
+                </div>
+              )}
+              <button
+                style={s.secondaryBtn}
+                onClick={async () => {
+                  if (!entrega.archivoUrl) { setMensaje('❌ No hay archivo para comprobar'); return; }
+                  setIaChecking(true);
+                  try {
+                    const res = await checkIAWithTurnitin(entrega.id, entrega.archivoUrl);
+                    setEntrega(prev => ({ ...prev, iaScore: res.iaScore, iaObservacion: res.iaObservacion, iaCheckedAt: new Date() }));
+                    setMensaje('✅ Comprobación IA realizada');
+                  } catch (err) {
+                    setMensaje('❌ Error comprobando IA: ' + err.message);
+                  } finally {
+                    setIaChecking(false);
+                  }
+                }}
+                disabled={iaChecking}
+              >
+                {iaChecking ? '⏳ Comprobando...' : 'Comprobar con Turnitin'}
+              </button>
+            </div>
+
+            {entrega.iaObservacion && (
+              <div style={{ marginTop: '12px', ...s.infoBox }}>
+                <p style={{ color: 'rgba(255,255,255,0.7)', margin: 0, fontSize: '13px' }}>{entrega.iaObservacion}</p>
+              </div>
+            )}
+
             {mensaje && (
               <div style={{ ...s.mensaje, marginTop: '12px', color: mensaje.includes('✅') ? '#22c55e' : '#ef4444' }}>
                 {mensaje}
@@ -177,31 +212,33 @@ export default function VisualizarEntrega() {
           </div>
 
           {/* PDF */}
-          <div style={s.card}>
+          <div style={{ ...s.card, display: 'flex', flexDirection: 'column' }}>
             <h3 style={s.cardTitle}>📄 Documento PDF</h3>
             {entrega.archivoUrl ? (
               <>
                 <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '12px', marginBottom: '12px' }}>
                   {entrega.archivoNombre}
                 </p>
-                    <object
-                  data={entrega.archivoUrl}
-                  type="application/pdf"
-                  style={{
-                    width: '100%',
-                    height: '600px',
-                    border: 'none',
-                    borderRadius: '8px',
-                    background: '#fff',
-                  }}
-                >
-                  <p style={{ color: 'rgba(0,0,0,0.75)', padding: '18px', textAlign: 'center' }}>
-                    Tu navegador no puede mostrar este PDF.{' '}
-                    <a href={entrega.archivoUrl} target="_blank" rel="noopener noreferrer" style={{ color: '#2563eb' }}>
-                      Abrir en nueva pestaña
-                    </a>
-                  </p>
-                </object>
+                <div style={{ height: '600px', overflow: 'auto', borderRadius: '8px', background: '#fff', border: '1px solid rgba(0,0,0,0.06)' }}>
+                  <object
+                    data={entrega.archivoUrl}
+                    type="application/pdf"
+                    style={{
+                      width: '100%',
+                      height: '100%',
+                      border: 'none',
+                      borderRadius: '8px',
+                      background: '#fff',
+                    }}
+                  >
+                    <p style={{ color: 'rgba(0,0,0,0.75)', padding: '18px', textAlign: 'center' }}>
+                      Tu navegador no puede mostrar este PDF.{' '}
+                      <a href={entrega.archivoUrl} target="_blank" rel="noopener noreferrer" style={{ color: '#2563eb' }}>
+                        Abrir en nueva pestaña
+                      </a>
+                    </p>
+                  </object>
+                </div>
                 <a
                   href={entrega.archivoUrl}
                   target="_blank"
@@ -275,7 +312,7 @@ export default function VisualizarEntrega() {
 }
 
 const s = {
-  container: { minHeight: '100vh', background: '#0f0c29', fontFamily: "'Segoe UI', sans-serif", padding: '32px' },
+  container: { height: '100vh', overflowY: 'auto', background: '#0f0c29', fontFamily: "'Segoe UI', sans-serif", padding: '32px' },
   header: { display: 'flex', alignItems: 'center', gap: '24px', marginBottom: '32px' },
   backBtn: { background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)', color: 'rgba(255,255,255,0.6)', padding: '8px 16px', borderRadius: '10px', cursor: 'pointer', fontSize: '14px' },
   title: { color: '#fff', fontSize: '28px', fontWeight: '700', margin: 0, flex: 1 },

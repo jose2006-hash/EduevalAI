@@ -240,6 +240,49 @@ export const crearEntrega = async (entrega) => {
   return { id: ref.id, ...entrega };
 };
 
+// Mock de comprobación IA / Turnitin
+export const checkIAWithTurnitinMock = async (entregaId, archivoUrl) => {
+  const iaScore = Math.round(Math.random() * 60) + 20;
+  const iaObservacion = `Mock: ${iaScore}% probable contenido generado por IA. Sustituir por Turnitin real.`;
+  try {
+    await updateDoc(doc(db, 'entregas', entregaId), {
+      iaScore,
+      iaObservacion,
+      iaCheckedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    console.error('Error guardando resultado IA mock:', err);
+  }
+  return { iaScore, iaObservacion };
+};
+
+export const checkIAWithTurnitin = async (entregaId, archivoUrl) => {
+  const serverUrl = process.env.REACT_APP_TURNITIN_URL || 'http://localhost:4000';
+  try {
+    const res = await fetch(`${serverUrl}/api/turnitin/check`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entregaId, archivoUrl }),
+    });
+    if (!res.ok) throw new Error('No se pudo contactar al servidor Turnitin');
+    const data = await res.json();
+    // Guardar en Firestore
+    try {
+      await updateDoc(doc(db, 'entregas', entregaId), {
+        iaScore: data.iaScore,
+        iaObservacion: data.iaObservacion,
+        iaCheckedAt: serverTimestamp(),
+      });
+    } catch (err) {
+      console.error('Error guardando resultado IA:', err);
+    }
+    return data;
+  } catch (err) {
+    console.warn('Fallo al usar endpoint Turnitin, usando mock:', err.message);
+    return checkIAWithTurnitinMock(entregaId, archivoUrl);
+  }
+};
+
 export const getEntregasByAlumnoYCurso = async (alumnoUid, cursoId) => {
   const q = query(collection(db, 'entregas'),
     where('alumnoUid', '==', alumnoUid),
