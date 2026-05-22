@@ -406,7 +406,7 @@ export default function GestionCursos() {
       {/* ── Modal entregas agrupadas por tema ── */}
       {cursoEntregas && !entregaDetalle && (
         <div style={s.overlay}>
-          <div style={{ ...s.modal, maxWidth: '920px' }}>
+          <div style={{ ...s.modal, maxWidth: '920px', maxHeight: 'calc(100vh - 80px)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             <div style={s.modalHeader}>
               <div>
                 <h2 style={s.modalTitle}>📋 Entregas — {cursoEntregas.nombre}</h2>
@@ -448,7 +448,7 @@ export default function GestionCursos() {
                 No hay entregas{filtroAlumno || filtroTipo ? ' con ese filtro' : ' aún'}
               </p>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '60vh', overflowY: 'auto', paddingRight: '4px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: 'calc(100vh - 320px)', overflowY: 'auto', paddingRight: '8px' }}>
                 {grupos.map(([tema, items]) => {
                   const expandido = gruposExpandidos[tema] !== false; // por defecto expandido
                   const stats = grupoStats(items);
@@ -1043,7 +1043,7 @@ const s = {
   solicitudesBtn: { width: '100%', padding: '10px', borderRadius: '10px', background: 'rgba(102,126,234,0.08)', border: '1px solid rgba(102,126,234,0.15)', color: 'rgba(167,139,250,0.7)', cursor: 'pointer', fontSize: '13px', fontWeight: '500' },
   overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 1000, overflowY: 'auto', padding: '32px' },
   modal: { background: '#1a1535', borderRadius: '20px', padding: '32px', width: '100%', maxWidth: '680px', border: '1px solid rgba(255,255,255,0.1)' },
-  modalHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px' },
+  modalHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px', position: 'sticky', top: 0, zIndex: 2, background: '#1a1535', paddingTop: 0, paddingBottom: 0 },
   modalTitle: { color: '#fff', fontSize: '20px', fontWeight: '700', margin: '0 0 4px' },
   closeBtn: { background: 'rgba(255,255,255,0.08)', border: 'none', color: 'rgba(255,255,255,0.6)', cursor: 'pointer', fontSize: '16px', width: '32px', height: '32px', borderRadius: '8px' },
   seccion: { marginBottom: '24px' },
