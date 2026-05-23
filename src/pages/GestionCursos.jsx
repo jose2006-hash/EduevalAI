@@ -565,8 +565,8 @@ export default function GestionCursos() {
 
       {/* ── Modal entregas agrupadas ── */}
       {cursoEntregas && !entregaDetalle && !showReporte && (
-        <div style={s.overlay}>
-          <div style={{ ...s.modal, maxWidth: '940px', maxHeight: '90vh', minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={s.overlayEntregas}>
+          <div style={s.modalEntregas}>
             <div style={s.modalHeader}>
               <div>
                 <h2 style={s.modalTitle}>📋 Entregas — {cursoEntregas.nombre}</h2>
@@ -578,7 +578,7 @@ export default function GestionCursos() {
             </div>
 
             {/* Filtros + acciones */}
-            <div style={{ display: 'flex', gap: '10px', marginBottom: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: '10px', marginBottom: '16px', flexWrap: 'wrap', alignItems: 'center', flexShrink: 0 }}>
               <input style={{ ...s.input, flex: 1, minWidth: '160px' }}
                 placeholder="🔍 Buscar alumno..."
                 value={filtroAlumno} onChange={e => setFiltroAlumno(e.target.value)} />
@@ -603,23 +603,15 @@ export default function GestionCursos() {
                 {generandoReporte ? '⏳ Generando...' : '📊 Reporte IA'}
               </button>
             </div>
-            {msgReporte && <p style={{ color: '#ef4444', fontSize: '13px', margin: '0 0 12px' }}>{msgReporte}</p>}
+            {msgReporte && <p style={{ color: '#ef4444', fontSize: '13px', margin: '0 0 12px', flexShrink: 0 }}>{msgReporte}</p>}
 
             {grupos.length === 0 ? (
               <p style={{ color: 'rgba(255,255,255,0.3)', textAlign: 'center', padding: '40px' }}>
                 No hay entregas{filtroAlumno || filtroTipo ? ' con ese filtro' : ' aún'}
               </p>
             ) : (
-              <div style={{
-                display: 'flex', flexDirection: 'column', gap: '10px',
-                flex: 1,
-                minHeight: 0,
-                maxHeight: '100%',
-                overflowY: 'auto',
-                paddingRight: '8px',
-                scrollbarWidth: 'thin',
-                scrollbarColor: 'rgba(167,139,250,0.5) rgba(255,255,255,0.06)',
-              }}>
+              /* ── SCROLL CONTAINER ── */
+              <div style={s.entregasScrollContainer}>
                 {grupos.map(([tema, items]) => {
                   const expandido = gruposExpandidos[tema] !== false;
                   const stats = grupoStats(items);
@@ -710,7 +702,7 @@ export default function GestionCursos() {
               </div>
             )}
 
-            <button style={{ ...s.primaryBtn, width: '100%', marginTop: '16px' }} onClick={() => setCursoEntregas(null)}>Cerrar</button>
+            <button style={{ ...s.primaryBtn, width: '100%', marginTop: '16px', flexShrink: 0 }} onClick={() => setCursoEntregas(null)}>Cerrar</button>
           </div>
         </div>
       )}
@@ -1127,9 +1119,29 @@ const s = {
   entregasBtn: { width: '100%', padding: '10px', borderRadius: '10px', background: 'linear-gradient(135deg,rgba(34,197,94,0.2),rgba(16,185,129,0.2))', border: '1px solid rgba(34,197,94,0.3)', color: '#34d399', cursor: 'pointer', fontSize: '13px', fontWeight: '600' },
   actividadesBtn: { width: '100%', padding: '10px', borderRadius: '10px', background: 'linear-gradient(135deg,rgba(102,126,234,0.25),rgba(118,75,162,0.25))', border: '1px solid rgba(102,126,234,0.35)', color: '#a78bfa', cursor: 'pointer', fontSize: '13px', fontWeight: '600' },
   solicitudesBtn: { width: '100%', padding: '10px', borderRadius: '10px', background: 'rgba(102,126,234,0.08)', border: '1px solid rgba(102,126,234,0.15)', color: 'rgba(167,139,250,0.7)', cursor: 'pointer', fontSize: '13px', fontWeight: '500' },
-  overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 1000, overflowY: 'auto', padding: '32px' },
-  modal: { background: '#1a1535', borderRadius: '20px', padding: '32px', width: '100%', maxWidth: '680px', border: '1px solid rgba(255,255,255,0.1)' },
-  modalHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px' },
+
+  // ── Overlay genérico (para otros modales) ──
+  overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '32px', overflowY: 'auto' },
+
+  // ── Overlay + modal ESPECÍFICOS para entregas (con scroll interno) ──
+  overlayEntregas: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '32px' },
+  modalEntregas: { background: '#1a1535', borderRadius: '20px', padding: '32px', width: '100%', maxWidth: '940px', maxHeight: '90vh', border: '1px solid rgba(255,255,255,0.1)', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', overflow: 'hidden' },
+
+  // ── Contenedor con scroll para la lista de grupos ──
+  entregasScrollContainer: {
+    flex: 1,
+    minHeight: 0,
+    overflowY: 'auto',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '10px',
+    paddingRight: '8px',
+    scrollbarWidth: 'thin',
+    scrollbarColor: 'rgba(167,139,250,0.5) rgba(255,255,255,0.06)',
+  },
+
+  modal: { background: '#1a1535', borderRadius: '20px', padding: '32px', width: '100%', maxWidth: '680px', border: '1px solid rgba(255,255,255,0.1)', boxSizing: 'border-box' },
+  modalHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px', flexShrink: 0 },
   modalTitle: { color: '#fff', fontSize: '20px', fontWeight: '700', margin: '0 0 4px' },
   closeBtn: { background: 'rgba(255,255,255,0.08)', border: 'none', color: 'rgba(255,255,255,0.6)', cursor: 'pointer', fontSize: '16px', width: '32px', height: '32px', borderRadius: '8px' },
   seccion: { marginBottom: '24px' },
@@ -1171,6 +1183,6 @@ const s = {
   tipoRow: { display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '10px' },
   removeBtn: { background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.2)', color: '#ef4444', borderRadius: '8px', cursor: 'pointer', padding: '8px 10px', fontSize: '13px' },
   addTipoBtn: { width: '100%', padding: '10px', borderRadius: '10px', border: '2px dashed rgba(102,126,234,0.3)', background: 'transparent', color: '#a78bfa', cursor: 'pointer', fontSize: '13px' },
-  grupoCard: { background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(102,126,234,0.15)', borderRadius: '14px', overflow: 'hidden' },
+  grupoCard: { background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(102,126,234,0.15)', borderRadius: '14px', overflow: 'hidden', flexShrink: 0 },
   grupoHeader: { width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 16px', background: 'rgba(102,126,234,0.08)', border: 'none', cursor: 'pointer', gap: '12px', textAlign: 'left' },
 };

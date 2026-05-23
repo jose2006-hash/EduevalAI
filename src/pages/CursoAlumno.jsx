@@ -7,7 +7,7 @@ import {
   calcularNotaFinal, getRubricas, getActividadesByCurso,
   getMatriculasByAlumno, eliminarMatricula, subirPdfEntrega,
 } from '../firebase/services.js';
-import { evaluarTrabajo } from '../openai/evaluador.js';
+import { evaluarTrabajo, detectarIA } from '../openai/evaluador.js';
 import { useAuth } from '../components/AuthContext.jsx';
 
 const MAX_ENTREGAS_POR_ACTIVIDAD = 2;
@@ -21,6 +21,15 @@ const esArchivoValido = (file) =>
   MIME_ACEPTADOS.includes(file.type) ||
   file.name?.toLowerCase().endsWith('.pdf') ||
   file.name?.toLowerCase().endsWith('.docx');
+
+// ── Helper badge IA ──────────────────────────────────────────────────────────
+const iaBadgeStyle = (pct) => {
+  if (pct == null) return null;
+  const bg    = pct >= 81 ? 'rgba(239,68,68,0.15)'   : pct >= 56 ? 'rgba(245,158,11,0.15)' : pct >= 26 ? 'rgba(99,102,241,0.15)' : 'rgba(34,197,94,0.12)';
+  const color = pct >= 81 ? '#ef4444'                : pct >= 56 ? '#f59e0b'               : pct >= 26 ? '#818cf8'               : '#22c55e';
+  const label = pct >= 81 ? `🤖 ${pct}% IA — Muy alto` : pct >= 56 ? `⚠️ ${pct}% IA — Alto` : pct >= 26 ? `🔍 ${pct}% IA — Moderado` : `✅ ${pct}% IA — Bajo`;
+  return { bg, color, label };
+};
 
 export default function CursoAlumno() {
   const { cursoId } = useParams();
@@ -45,6 +54,7 @@ export default function CursoAlumno() {
   const [actividadSeleccionada, setActividadSeleccionada] = useState(null);
   const [archivo, setArchivo] = useState(null);
   const [enviando, setEnviando] = useState(false);
+  const [faseProceso, setFaseProceso] = useState(''); // 'evaluando' | 'detectando' | ''
   const [error, setError] = useState('');
   const [msg, setMsg] = useState('');
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState('');
@@ -82,64 +92,60 @@ export default function CursoAlumno() {
 
   const procesarArchivo = async (file) => {
     if (!file) return;
-    if (!esArchivoValido(file)) {
-      setError('Solo se aceptan archivos PDF o Word (.docx)');
-      return;
-    }
-    setError('');
-    setArchivo(file);
+    if (!esArchivoValido(file)) { setError('Solo se aceptan archivos PDF o Word (.docx)'); return; }
+    setError(''); setArchivo(file);
     try {
       if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl);
-      // Solo generamos preview para PDF
       if (file.type === 'application/pdf' || file.name?.toLowerCase().endsWith('.pdf')) {
         setPdfPreviewUrl(URL.createObjectURL(file));
-      } else {
-        setPdfPreviewUrl('');
-      }
+      } else { setPdfPreviewUrl(''); }
     } catch { /* ignore */ }
   };
 
-  const handleDragOver = (e) => { e.preventDefault(); setDragging(true); };
+  const handleDragOver  = (e) => { e.preventDefault(); setDragging(true); };
   const handleDragLeave = () => setDragging(false);
-  const handleDrop = async (e) => { e.preventDefault(); setDragging(false); await procesarArchivo(e.dataTransfer.files[0]); };
+  const handleDrop      = async (e) => { e.preventDefault(); setDragging(false); await procesarArchivo(e.dataTransfer.files[0]); };
   const handleFileInput = async (e) => { await procesarArchivo(e.target.files[0]); };
 
+  // ── Enviar trabajo: evalúa con IA y detecta contenido IA ─────────────────
   const handleEnviar = async () => {
     if (!archivo && !editEntrega?.archivoUrl) return setError('Sube un PDF o archivo Word');
     if (!form.tipoEvaluacion) return setError('Selecciona el tipo de evaluación');
     if (!form.titulo.trim()) return setError('Ingresa un título para tu trabajo');
 
-    // Verificar fecha límite
     if (actividadSeleccionada?.fechaLimite) {
       const limite = new Date(actividadSeleccionada.fechaLimite);
-      if (!Number.isNaN(limite.getTime()) && new Date() > limite) {
+      if (!Number.isNaN(limite.getTime()) && new Date() > limite)
         return setError('⏰ La fecha límite de esta actividad ya venció');
-      }
     }
 
-    // Verificar límite de entregas por actividad
     if (!editEntrega && form.actividadId) {
       const count = contarEntregasActividad(form.actividadId);
-      if (count >= MAX_ENTREGAS_POR_ACTIVIDAD) {
+      if (count >= MAX_ENTREGAS_POR_ACTIVIDAD)
         return setError(`Solo puedes subir un máximo de ${MAX_ENTREGAS_POR_ACTIVIDAD} trabajos por actividad`);
-      }
     }
 
     setError(''); setEnviando(true); setMsg('');
+
     try {
       const rubrica = rubricas.find(r => r.id === form.rubricaId) || rubricas[0];
       const enunciadoTexto = actividadSeleccionada?.enunciadoTexto || '';
-      let resultado = null;
 
+      // 1️⃣ Evaluar con rúbrica
+      let resultado = null;
       if (rubrica) {
-        const inputEvaluacion = archivo;
+        setFaseProceso('evaluando');
         resultado = await evaluarTrabajo(
-          inputEvaluacion, rubrica, curso.nombre, form.titulo,
+          archivo, rubrica, curso.nombre, form.titulo,
           curso.silaboTexto || '', enunciadoTexto
         );
       }
 
-      // Subir archivo a Storage (solo si hay archivo nuevo)
+      // 2️⃣ Detectar IA (siempre, en paralelo o secuencial si no hay rúbrica)
+      setFaseProceso('detectando');
+      const iaResultado = await detectarIA(archivo);
+
+      // 3️⃣ Subir archivo a Storage
       const timestamp = Date.now();
       let archivoData = { archivoNombre: editEntrega?.archivoNombre || null, archivoUrl: editEntrega?.archivoUrl || null };
       if (archivo) {
@@ -147,19 +153,28 @@ export default function CursoAlumno() {
       }
 
       const datosEntrega = {
-        alumnoUid: user.uid, alumnoNombre: userData.nombre,
-        cursoId, cursoNombre: curso.nombre,
+        alumnoUid:      user.uid,
+        alumnoNombre:   userData.nombre,
+        cursoId,
+        cursoNombre:    curso.nombre,
         tipoEvaluacion: form.tipoEvaluacion,
-        actividadId: form.actividadId || null,
+        actividadId:    form.actividadId || null,
         actividadTitulo: actividadSeleccionada?.titulo || null,
-        titulo: form.titulo,
-        texto: '',
-        archivoNombre: archivoData?.archivoNombre || archivo?.name || null,
-        archivoUrl: archivoData?.archivoUrl || null,
-        rubricaId: rubrica?.id || null,
-        rubricaNombre: rubrica?.nombre || null,
-        estado: resultado ? 'evaluado' : 'pendiente',
+        titulo:         form.titulo,
+        texto:          '',
+        archivoNombre:  archivoData?.archivoNombre || archivo?.name || null,
+        archivoUrl:     archivoData?.archivoUrl || null,
+        rubricaId:      rubrica?.id || null,
+        rubricaNombre:  rubrica?.nombre || null,
+        estado:         resultado ? 'evaluado' : 'pendiente',
+        // Resultado evaluación rúbrica
         ...(resultado || {}),
+        // Resultado detector de IA
+        porcentajeIA:   iaResultado?.porcentajeIA ?? null,
+        iaNivel:        iaResultado?.nivel || null,
+        iaVeredicto:    iaResultado?.veredicto || null,
+        iaObservacion:  iaResultado?.observacion || null,
+        iaIndicadores:  iaResultado?.indicadores || [],
       };
 
       if (editEntrega) {
@@ -173,51 +188,34 @@ export default function CursoAlumno() {
 
       setShowForm(false); resetForm(); await cargar();
     } catch (err) {
-      setError('Error al evaluar: ' + err.message);
-    } finally { setEnviando(false); }
+      setError('Error al procesar: ' + err.message);
+    } finally {
+      setEnviando(false); setFaseProceso('');
+    }
   };
 
   const resetForm = () => {
     setForm({ tipoEvaluacion: '', actividadId: '', titulo: '', texto: '', rubricaId: '' });
-    setActividadSeleccionada(null);
-    setArchivo(null); setError('');
+    setActividadSeleccionada(null); setArchivo(null); setError('');
     try { if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl); } catch { /* ignore */ }
     setPdfPreviewUrl('');
   };
 
-  const handleEliminarEntrega = (e) => {
-    setEntregaSeleccionada(null);
-    setConfirm({ tipo: 'entrega', id: e.id, nombre: e.titulo });
-  };
-
-  const handleEditarEntrega = (e) => {
-    setEntregaSeleccionada(null);
-    setEditEntrega(e);
+  const handleEliminarEntrega = (e) => { setEntregaSeleccionada(null); setConfirm({ tipo: 'entrega', id: e.id, nombre: e.titulo }); };
+  const handleEditarEntrega   = (e) => {
+    setEntregaSeleccionada(null); setEditEntrega(e);
     setShowForm(true); setMsg(''); setError('');
-    setForm({
-      tipoEvaluacion: e.tipoEvaluacion || '',
-      actividadId: e.actividadId || '',
-      titulo: e.titulo || '',
-      texto: e.texto || '',
-      rubricaId: e.rubricaId || '',
-    });
+    setForm({ tipoEvaluacion: e.tipoEvaluacion || '', actividadId: e.actividadId || '', titulo: e.titulo || '', texto: e.texto || '', rubricaId: e.rubricaId || '' });
     const act = e.actividadId ? actividades.find(a => a.id === e.actividadId) : null;
-    setActividadSeleccionada(act || null);
-    setArchivo(null);
-    setPdfPreviewUrl(e.archivoUrl || '');
+    setActividadSeleccionada(act || null); setArchivo(null); setPdfPreviewUrl(e.archivoUrl || '');
   };
-
-  const handleDesmatricularse = () =>
-    setConfirm({ tipo: 'desmatricular', id: null, nombre: curso?.nombre });
+  const handleDesmatricularse = () => setConfirm({ tipo: 'desmatricular', id: null, nombre: curso?.nombre });
 
   const ejecutarConfirm = async () => {
     if (!confirm) return;
     try {
-      if (confirm.tipo === 'entrega') {
-        await eliminarEntrega(confirm.id);
-        setMsg('✅ Entrega eliminada');
-        await cargar();
-      } else if (confirm.tipo === 'desmatricular') {
+      if (confirm.tipo === 'entrega') { await eliminarEntrega(confirm.id); setMsg('✅ Entrega eliminada'); await cargar(); }
+      else if (confirm.tipo === 'desmatricular') {
         const mats = await getMatriculasByAlumno(user.uid);
         const mat = mats.find(m => m.cursoId === cursoId);
         if (mat) await eliminarMatricula(mat.id);
@@ -262,9 +260,7 @@ export default function CursoAlumno() {
         <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px' }}>
           <div>
             <p style={s.notaLabel}>Nota final ponderada</p>
-            <p style={{ ...s.notaValue, color: nivelColor(notaFinal) }}>
-              {notaFinal !== null ? `${notaFinal}/20` : '—'}
-            </p>
+            <p style={{ ...s.notaValue, color: nivelColor(notaFinal) }}>{notaFinal !== null ? `${notaFinal}/20` : '—'}</p>
           </div>
           <button style={s.desmatricularBtn} onClick={handleDesmatricularse}>🚪 Salir del curso</button>
         </div>
@@ -276,8 +272,7 @@ export default function CursoAlumno() {
       <div style={s.pesosRow}>
         {curso?.tiposEvaluacion?.map((t, i) => {
           const ents = (entregasPorTipo[t.nombre] || []).filter(e => e.estado === 'evaluado');
-          const prom = ents.length
-            ? (ents.reduce((sum, e) => sum + (e.notaFinal || 0), 0) / ents.length).toFixed(1) : null;
+          const prom = ents.length ? (ents.reduce((sum, e) => sum + (e.notaFinal || 0), 0) / ents.length).toFixed(1) : null;
           const actsDelTipo = actividades.filter(a => a.tipoEvaluacion === t.nombre);
           return (
             <div key={i} style={s.pesoCard}>
@@ -285,9 +280,7 @@ export default function CursoAlumno() {
               <p style={s.pesoPct}>{t.peso}%</p>
               <p style={{ ...s.pesoNota, color: nivelColor(prom) }}>{prom ? `${prom}/20` : '—'}</p>
               <p style={s.pesoCount}>{ents.length} entrega{ents.length !== 1 ? 's' : ''}</p>
-              {actsDelTipo.length > 0 && (
-                <p style={s.pesoActs}>{actsDelTipo.length} actividad{actsDelTipo.length !== 1 ? 'es' : ''}</p>
-              )}
+              {actsDelTipo.length > 0 && <p style={s.pesoActs}>{actsDelTipo.length} actividad{actsDelTipo.length !== 1 ? 'es' : ''}</p>}
             </div>
           );
         })}
@@ -312,8 +305,7 @@ export default function CursoAlumno() {
                   {a.enunciadoNombre && <p style={s.actArchivo}>📄 Enunciado: {a.enunciadoNombre}</p>}
                   {a.fechaLimite && (
                     <p style={{ color: vencida ? '#ef4444' : '#f59e0b', fontSize: '12px', margin: '2px 0 0' }}>
-                      📅 Límite: {new Date(a.fechaLimite).toLocaleString('es-PE')}
-                      {vencida && ' — VENCIDA'}
+                      📅 Límite: {new Date(a.fechaLimite).toLocaleString('es-PE')}{vencida && ' — VENCIDA'}
                     </p>
                   )}
                   <p style={{ color: agotada ? '#ef4444' : 'rgba(255,255,255,0.4)', fontSize: '11px', margin: '4px 0 0' }}>
@@ -355,31 +347,34 @@ export default function CursoAlumno() {
               <p style={s.emptyTipo}>Sin entregas en esta categoría aún</p>
             ) : (
               <div style={s.entregasGrid}>
-                {ents.map((e, i) => (
-                  <div key={i} style={s.entregaCard} onClick={() => setEntregaSeleccionada(e)}>
-                    <div style={s.entregaTop}>
-                      <span style={s.entregaTitulo}>{e.titulo}</span>
-                      <span style={{
-                        ...s.estadoBadge,
-                        color: e.estado === 'evaluado' ? nivelColor(e.notaFinal) : '#f59e0b',
-                        background: e.estado === 'evaluado' ? `${nivelColor(e.notaFinal)}22` : '#f59e0b22',
-                      }}>
-                        {e.estado === 'evaluado' ? `${e.notaFinal}/20` : '⏳ Pendiente'}
-                      </span>
+                {ents.map((e, i) => {
+                  const iab = e.porcentajeIA != null ? iaBadgeStyle(e.porcentajeIA) : null;
+                  return (
+                    <div key={i} style={s.entregaCard} onClick={() => setEntregaSeleccionada(e)}>
+                      <div style={s.entregaTop}>
+                        <span style={s.entregaTitulo}>{e.titulo}</span>
+                        <span style={{ ...s.estadoBadge, color: e.estado === 'evaluado' ? nivelColor(e.notaFinal) : '#f59e0b', background: e.estado === 'evaluado' ? `${nivelColor(e.notaFinal)}22` : '#f59e0b22' }}>
+                          {e.estado === 'evaluado' ? `${e.notaFinal}/20` : '⏳'}
+                        </span>
+                      </div>
+                      {e.notaEditadaManualmente && <span style={{ color: '#60a5fa', fontSize: '10px' }}>✏️ Nota ajustada por docente</span>}
+                      {e.actividadTitulo && <p style={s.actividadTag}>📋 {e.actividadTitulo}</p>}
+                      {e.archivoNombre && <p style={s.archivoTag}>📄 {e.archivoNombre}</p>}
+                      {/* Badge IA */}
+                      {iab && (
+                        <span style={{ display: 'inline-block', marginTop: '4px', background: iab.bg, color: iab.color, border: `1px solid ${iab.color}44`, padding: '2px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: '700' }}>
+                          {iab.label}
+                        </span>
+                      )}
+                      {e.nivelGlobal && <p style={s.entregaNivel}>{e.nivelGlobal}</p>}
+                      <p style={s.entregaFecha}>{e.creadoEn?.toDate?.()?.toLocaleDateString('es-PE') || '—'}</p>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }} onClick={ev => ev.stopPropagation()}>
+                        <button style={s.editBtn} onClick={() => handleEditarEntrega(e)}>✏️ Editar</button>
+                        <button style={s.deleteEntregaBtn} onClick={() => handleEliminarEntrega(e)}>🗑</button>
+                      </div>
                     </div>
-                    {e.notaEditadaManualmente && (
-                      <span style={{ color: '#60a5fa', fontSize: '10px' }}>✏️ Nota ajustada por docente</span>
-                    )}
-                    {e.actividadTitulo && <p style={s.actividadTag}>📋 {e.actividadTitulo}</p>}
-                    {e.archivoNombre && <p style={s.archivoTag}>📄 {e.archivoNombre}</p>}
-                    {e.nivelGlobal && <p style={s.entregaNivel}>{e.nivelGlobal}</p>}
-                    <p style={s.entregaFecha}>{e.creadoEn?.toDate?.()?.toLocaleDateString('es-PE') || '—'}</p>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }} onClick={ev => ev.stopPropagation()}>
-                      <button style={{ ...s.editBtn }} onClick={() => handleEditarEntrega(e)}>✏️ Editar</button>
-                      <button style={s.deleteEntregaBtn} onClick={() => handleEliminarEntrega(e)}>🗑</button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -396,15 +391,12 @@ export default function CursoAlumno() {
             </h3>
             <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '14px', margin: '0 0 24px', lineHeight: '1.5' }}>
               {confirm.tipo === 'entrega'
-                ? <>¿Eliminar <strong style={{ color: '#fff' }}>"{confirm.nombre}"</strong>? No se puede deshacer.</>
-                : <>¿Desmatricularte de <strong style={{ color: '#fff' }}>"{confirm.nombre}"</strong>?</>
-              }
+                ? <><strong style={{ color: '#fff' }}>"{confirm.nombre}"</strong> — No se puede deshacer.</>
+                : <>¿Desmatricularte de <strong style={{ color: '#fff' }}>"{confirm.nombre}"</strong>?</>}
             </p>
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
               <button style={s.secondaryBtn} onClick={() => setConfirm(null)}>Cancelar</button>
-              <button style={s.dangerBtn} onClick={ejecutarConfirm}>
-                {confirm.tipo === 'entrega' ? 'Sí, eliminar' : 'Sí, salir'}
-              </button>
+              <button style={s.dangerBtn} onClick={ejecutarConfirm}>{confirm.tipo === 'entrega' ? 'Sí, eliminar' : 'Sí, salir'}</button>
             </div>
           </div>
         </div>
@@ -437,20 +429,15 @@ export default function CursoAlumno() {
                 <label style={s.label}>Tipo de evaluación *</label>
                 <select style={s.select} value={form.tipoEvaluacion} onChange={e => handleTipoChange(e.target.value)}>
                   <option value="">Seleccionar...</option>
-                  {curso?.tiposEvaluacion?.map((t, i) => (
-                    <option key={i} value={t.nombre}>{t.nombre} ({t.peso}%)</option>
-                  ))}
+                  {curso?.tiposEvaluacion?.map((t, i) => <option key={i} value={t.nombre}>{t.nombre} ({t.peso}%)</option>)}
                 </select>
               </div>
               <div>
                 <label style={s.label}>Actividad (opcional)</label>
-                <select style={s.select} value={form.actividadId}
-                  onChange={e => handleActividadChange(e.target.value)} disabled={!form.tipoEvaluacion}>
+                <select style={s.select} value={form.actividadId} onChange={e => handleActividadChange(e.target.value)} disabled={!form.tipoEvaluacion}>
                   <option value="">Sin actividad específica</option>
                   {actividadesFiltradas.map(a => (
-                    <option key={a.id} value={a.id}>
-                      {a.titulo} ({contarEntregasActividad(a.id)}/{MAX_ENTREGAS_POR_ACTIVIDAD})
-                    </option>
+                    <option key={a.id} value={a.id}>{a.titulo} ({contarEntregasActividad(a.id)}/{MAX_ENTREGAS_POR_ACTIVIDAD})</option>
                   ))}
                 </select>
               </div>
@@ -459,20 +446,18 @@ export default function CursoAlumno() {
             <div style={s.grid2}>
               <div>
                 <label style={s.label}>Título del trabajo *</label>
-                <input style={s.input} placeholder="Ej: Tarea 1"
-                  value={form.titulo} onChange={e => setForm(f => ({ ...f, titulo: e.target.value }))} />
+                <input style={s.input} placeholder="Ej: Tarea 1" value={form.titulo} onChange={e => setForm(f => ({ ...f, titulo: e.target.value }))} />
               </div>
               <div>
                 <label style={s.label}>Rúbrica de evaluación</label>
-                <select style={s.select} value={form.rubricaId}
-                  onChange={e => setForm(f => ({ ...f, rubricaId: e.target.value }))}>
+                <select style={s.select} value={form.rubricaId} onChange={e => setForm(f => ({ ...f, rubricaId: e.target.value }))}>
                   <option value="">{rubricas.length === 0 ? 'Sin rúbricas asignadas' : 'Seleccionar...'}</option>
                   {rubricas.map(r => <option key={r.id} value={r.id}>{r.nombre}</option>)}
                 </select>
               </div>
             </div>
 
-            {/* Zona de subida de archivo */}
+            {/* Drop zone */}
             <div ref={dropRef}
               style={{ ...s.dropZone, ...(dragging ? s.dropZoneActive : {}), ...(archivo ? s.dropZoneDone : {}) }}
               onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
@@ -480,12 +465,8 @@ export default function CursoAlumno() {
                 <div style={s.dropContent}>
                   <span style={{ fontSize: '40px' }}>{esArchivoWord(archivo) ? '📝' : '✅'}</span>
                   <p style={{ ...s.dropText, color: '#22c55e' }}>{archivo.name}</p>
-                  <p style={s.dropHint}>
-                    {esArchivoWord(archivo) ? 'Archivo Word listo para evaluar' : 'PDF listo para evaluar'}
-                  </p>
-                  <button style={s.clearBtn} onClick={() => { setArchivo(null); setPdfPreviewUrl(''); }}>
-                    Quitar archivo
-                  </button>
+                  <p style={s.dropHint}>{esArchivoWord(archivo) ? 'Archivo Word listo' : 'PDF listo'}</p>
+                  <button style={s.clearBtn} onClick={() => { setArchivo(null); setPdfPreviewUrl(''); }}>Quitar archivo</button>
                 </div>
               ) : (
                 <div style={s.dropContent}>
@@ -500,40 +481,40 @@ export default function CursoAlumno() {
               )}
             </div>
 
-            {/* Preview PDF local (antes de subir) */}
             {pdfPreviewUrl && archivo && !esArchivoWord(archivo) && (
               <div style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', overflow: 'hidden', marginBottom: '16px' }}>
-                <p style={{ padding: '8px 12px', background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.5)', fontSize: '12px', margin: 0 }}>
-                  Vista previa del PDF
-                </p>
+                <p style={{ padding: '8px 12px', background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.5)', fontSize: '12px', margin: 0 }}>Vista previa del PDF</p>
                 <iframe title="Vista previa" src={pdfPreviewUrl} style={{ width: '100%', height: '320px', border: 'none', background: '#fff' }} />
               </div>
             )}
 
-            {/* Si editando y hay archivo previo guardado */}
             {!archivo && editEntrega?.archivoUrl && (
               <div style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', padding: '14px 16px', marginBottom: '16px' }}>
                 <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '13px', margin: '0 0 4px' }}>
                   Archivo actual: <strong style={{ color: '#fff' }}>{editEntrega.archivoNombre}</strong>
                 </p>
-                <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px', margin: 0 }}>
-                  Sube un nuevo archivo para reemplazarlo, o deja vacío para mantener el actual.
-                </p>
+                <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px', margin: 0 }}>Sube un nuevo archivo para reemplazarlo.</p>
               </div>
             )}
 
             {error && <p style={s.error}>{error}</p>}
+
+            {/* Indicador de fase */}
             {enviando && (
               <div style={s.evaluandoMsg}>
                 <div style={s.spinner} />
-                Evaluando con IA{actividadSeleccionada?.enunciadoTexto ? ' (con enunciado del docente)' : ''}... esto puede tomar unos segundos.
+                {faseProceso === 'evaluando'
+                  ? `Evaluando con IA${actividadSeleccionada?.enunciadoTexto ? ' (con enunciado del docente)' : ''}...`
+                  : faseProceso === 'detectando'
+                  ? '🔍 Analizando contenido generado por IA...'
+                  : 'Procesando...'}
               </div>
             )}
 
             <div style={{ display: 'flex', gap: '12px', marginTop: '20px' }}>
               <button style={s.secondaryBtn} onClick={() => { setShowForm(false); setEditEntrega(null); resetForm(); }}>Cancelar</button>
               <button style={s.primaryBtn} onClick={handleEnviar} disabled={enviando}>
-                {enviando ? 'Evaluando...' : editEntrega ? '💾 Guardar cambios' : '🚀 Enviar y evaluar con IA'}
+                {enviando ? 'Procesando...' : editEntrega ? '💾 Guardar cambios' : '🚀 Enviar y evaluar con IA'}
               </button>
             </div>
           </div>
@@ -553,8 +534,7 @@ export default function CursoAlumno() {
                 </p>
               </div>
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <button style={{ ...s.secondaryBtn, padding: '6px 12px', fontSize: '12px' }}
-                  onClick={() => handleEditarEntrega(entregaSeleccionada)}>✏️ Editar</button>
+                <button style={{ ...s.secondaryBtn, padding: '6px 12px', fontSize: '12px' }} onClick={() => handleEditarEntrega(entregaSeleccionada)}>✏️ Editar</button>
                 <button style={s.deleteEntregaBtn} onClick={() => handleEliminarEntrega(entregaSeleccionada)}>🗑</button>
                 <button style={s.closeBtn} onClick={() => setEntregaSeleccionada(null)}>✕</button>
               </div>
@@ -562,27 +542,50 @@ export default function CursoAlumno() {
 
             {entregaSeleccionada.notaEditadaManualmente && (
               <div style={{ background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.3)', borderRadius: '10px', padding: '10px 14px', marginBottom: '16px', fontSize: '13px', color: '#93c5fd' }}>
-                ✏️ Nota ajustada manualmente por el docente
-                {entregaSeleccionada.comentarioDocente && ` — "${entregaSeleccionada.comentarioDocente}"`}
+                ✏️ Nota ajustada por el docente{entregaSeleccionada.comentarioDocente && ` — "${entregaSeleccionada.comentarioDocente}"`}
               </div>
             )}
 
+            {/* Nota */}
             <div style={{ textAlign: 'center', padding: '20px 0', borderBottom: '1px solid rgba(255,255,255,0.06)', marginBottom: '20px' }}>
               <div style={{ fontSize: '56px', fontWeight: '800', color: nivelColor(entregaSeleccionada.notaFinal) }}>
                 {entregaSeleccionada.notaFinal}<span style={{ fontSize: '22px', opacity: 0.5 }}>/20</span>
               </div>
-              <div style={{ color: nivelColor(entregaSeleccionada.notaFinal), fontWeight: '600', fontSize: '18px' }}>
-                {entregaSeleccionada.nivelGlobal}
-              </div>
+              <div style={{ color: nivelColor(entregaSeleccionada.notaFinal), fontWeight: '600', fontSize: '18px' }}>{entregaSeleccionada.nivelGlobal}</div>
             </div>
 
+            {/* Badge IA detallado */}
+            {entregaSeleccionada.porcentajeIA != null && (() => {
+              const iab = iaBadgeStyle(entregaSeleccionada.porcentajeIA);
+              return (
+                <div style={{ background: `${iab.color}11`, border: `1px solid ${iab.color}33`, borderRadius: '12px', padding: '14px 16px', marginBottom: '16px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
+                    <span style={{ background: `${iab.color}22`, color: iab.color, border: `1px solid ${iab.color}44`, padding: '3px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: '700' }}>
+                      {iab.label}
+                    </span>
+                  </div>
+                  {entregaSeleccionada.iaObservacion && (
+                    <p style={{ color: 'rgba(255,255,255,0.6)', fontSize: '13px', margin: '0 0 8px', lineHeight: '1.5' }}>
+                      {entregaSeleccionada.iaObservacion}
+                    </p>
+                  )}
+                  {entregaSeleccionada.iaIndicadores?.length > 0 && (
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                      {entregaSeleccionada.iaIndicadores.map((ind, i) => (
+                        <span key={i} style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.4)', padding: '2px 8px', borderRadius: '5px', fontSize: '11px' }}>{ind}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Criterios */}
             {entregaSeleccionada.criterios?.map((c, i) => (
               <div key={i} style={{ marginBottom: '16px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
                   <span style={{ color: '#fff', fontSize: '14px', fontWeight: '500' }}>{c.nombre}</span>
-                  <span style={{ color: nivelColor(c.puntajeObtenido / c.puntajeMaximo * 20), fontWeight: '600', fontSize: '14px' }}>
-                    {c.puntajeObtenido}/{c.puntajeMaximo} — {c.nivel}
-                  </span>
+                  <span style={{ color: nivelColor(c.puntajeObtenido / c.puntajeMaximo * 20), fontWeight: '600', fontSize: '14px' }}>{c.puntajeObtenido}/{c.puntajeMaximo} — {c.nivel}</span>
                 </div>
                 <div style={{ height: '6px', background: 'rgba(255,255,255,0.08)', borderRadius: '3px', overflow: 'hidden' }}>
                   <div style={{ height: '100%', width: `${(c.puntajeObtenido / c.puntajeMaximo) * 100}%`, background: nivelColor(c.puntajeObtenido / c.puntajeMaximo * 20), borderRadius: '3px' }} />
@@ -594,9 +597,7 @@ export default function CursoAlumno() {
             {entregaSeleccionada.retroalimentacionGeneral && (
               <div style={{ background: 'rgba(102,126,234,0.08)', borderRadius: '12px', padding: '16px', margin: '16px 0' }}>
                 <p style={{ color: 'rgba(255,255,255,0.45)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>Retroalimentación</p>
-                <p style={{ color: 'rgba(255,255,255,0.75)', fontSize: '14px', lineHeight: '1.7', margin: 0 }}>
-                  {entregaSeleccionada.retroalimentacionGeneral}
-                </p>
+                <p style={{ color: 'rgba(255,255,255,0.75)', fontSize: '14px', lineHeight: '1.7', margin: 0 }}>{entregaSeleccionada.retroalimentacionGeneral}</p>
               </div>
             )}
 
@@ -604,17 +605,13 @@ export default function CursoAlumno() {
               {entregaSeleccionada.fortalezas?.length > 0 && (
                 <div style={{ background: 'rgba(34,197,94,0.06)', borderRadius: '10px', padding: '14px' }}>
                   <p style={{ color: '#22c55e', fontSize: '12px', fontWeight: '600', marginBottom: '8px' }}>💪 FORTALEZAS</p>
-                  {entregaSeleccionada.fortalezas.map((f, i) => (
-                    <p key={i} style={{ color: 'rgba(255,255,255,0.6)', fontSize: '13px', margin: '0 0 4px' }}>✓ {f}</p>
-                  ))}
+                  {entregaSeleccionada.fortalezas.map((f, i) => <p key={i} style={{ color: 'rgba(255,255,255,0.6)', fontSize: '13px', margin: '0 0 4px' }}>✓ {f}</p>)}
                 </div>
               )}
               {entregaSeleccionada.areasDesMejora?.length > 0 && (
                 <div style={{ background: 'rgba(245,158,11,0.06)', borderRadius: '10px', padding: '14px' }}>
                   <p style={{ color: '#f59e0b', fontSize: '12px', fontWeight: '600', marginBottom: '8px' }}>📈 MEJORAR</p>
-                  {entregaSeleccionada.areasDesMejora.map((a, i) => (
-                    <p key={i} style={{ color: 'rgba(255,255,255,0.6)', fontSize: '13px', margin: '0 0 4px' }}>⚠ {a}</p>
-                  ))}
+                  {entregaSeleccionada.areasDesMejora.map((a, i) => <p key={i} style={{ color: 'rgba(255,255,255,0.6)', fontSize: '13px', margin: '0 0 4px' }}>⚠ {a}</p>)}
                 </div>
               )}
             </div>
@@ -622,33 +619,24 @@ export default function CursoAlumno() {
             {entregaSeleccionada.recomendaciones?.length > 0 && (
               <div style={{ marginTop: '12px' }}>
                 <p style={{ color: 'rgba(255,255,255,0.45)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>Recomendaciones</p>
-                {entregaSeleccionada.recomendaciones.map((r, i) => (
-                  <p key={i} style={{ color: '#a78bfa', fontSize: '14px', margin: '0 0 6px' }}>→ {r}</p>
-                ))}
+                {entregaSeleccionada.recomendaciones.map((r, i) => <p key={i} style={{ color: '#a78bfa', fontSize: '14px', margin: '0 0 6px' }}>→ {r}</p>)}
               </div>
             )}
 
-            {/* Ver archivo del alumno */}
             {entregaSeleccionada.archivoUrl && (
               <div style={{ marginTop: '16px', background: 'rgba(255,255,255,0.03)', borderRadius: '12px', padding: '14px', border: '1px solid rgba(255,255,255,0.08)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                  <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', margin: 0 }}>
-                    📄 Mi archivo entregado
-                  </p>
+                  <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', margin: 0 }}>📄 Mi archivo</p>
                   <a href={entregaSeleccionada.archivoUrl} target="_blank" rel="noreferrer"
                     style={{ color: '#a78bfa', fontSize: '13px', fontWeight: '600', textDecoration: 'none' }}>
                     Abrir / Descargar →
                   </a>
                 </div>
-                <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '12px', margin: 0 }}>
-                  {entregaSeleccionada.archivoNombre}
-                </p>
+                <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '12px', margin: 0 }}>{entregaSeleccionada.archivoNombre}</p>
               </div>
             )}
 
-            <button style={{ ...s.primaryBtn, width: '100%', marginTop: '20px' }} onClick={() => setEntregaSeleccionada(null)}>
-              Cerrar
-            </button>
+            <button style={{ ...s.primaryBtn, width: '100%', marginTop: '20px' }} onClick={() => setEntregaSeleccionada(null)}>Cerrar</button>
           </div>
         </div>
       )}
@@ -716,9 +704,6 @@ const s = {
   label: { display: 'block', color: 'rgba(255,255,255,0.6)', fontSize: '13px', fontWeight: '500', marginBottom: '8px' },
   input: { width: '100%', padding: '11px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.06)', color: '#fff', fontSize: '14px', outline: 'none', boxSizing: 'border-box' },
   select: { width: '100%', padding: '11px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(20,16,50,0.95)', color: '#fff', fontSize: '14px', outline: 'none', boxSizing: 'border-box' },
-  tabs: { display: 'flex', background: 'rgba(255,255,255,0.06)', borderRadius: '10px', padding: '4px', marginBottom: '16px', gap: '4px' },
-  tab: { flex: 1, padding: '10px', borderRadius: '8px', border: 'none', background: 'transparent', color: 'rgba(255,255,255,0.5)', fontSize: '14px', fontWeight: '500', cursor: 'pointer' },
-  tabActivo: { background: 'rgba(255,255,255,0.1)', color: '#fff', fontWeight: '600' },
   dropZone: { border: '2px dashed rgba(102,126,234,0.35)', borderRadius: '16px', padding: '40px 20px', textAlign: 'center', cursor: 'pointer', background: 'rgba(102,126,234,0.04)', marginBottom: '16px', transition: 'all 0.2s' },
   dropZoneActive: { border: '2px dashed #667eea', background: 'rgba(102,126,234,0.12)' },
   dropZoneDone: { border: '2px solid rgba(34,197,94,0.4)', background: 'rgba(34,197,94,0.06)' },
@@ -727,7 +712,6 @@ const s = {
   dropHint: { color: 'rgba(255,255,255,0.4)', fontSize: '13px', margin: 0 },
   selectFileBtn: { display: 'inline-block', padding: '10px 20px', borderRadius: '10px', background: 'rgba(102,126,234,0.2)', border: '1px solid rgba(102,126,234,0.35)', color: '#a78bfa', fontSize: '14px', cursor: 'pointer', fontWeight: '500' },
   clearBtn: { background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)', color: '#ef4444', borderRadius: '8px', padding: '6px 14px', cursor: 'pointer', fontSize: '13px' },
-  textarea: { width: '100%', padding: '14px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.04)', color: '#fff', fontSize: '14px', outline: 'none', resize: 'vertical', lineHeight: '1.6', fontFamily: 'inherit', boxSizing: 'border-box' },
   error: { color: '#ef4444', fontSize: '13px', marginTop: '10px' },
   evaluandoMsg: { display: 'flex', alignItems: 'center', gap: '12px', color: '#a78bfa', fontSize: '14px', marginTop: '14px', padding: '14px', background: 'rgba(102,126,234,0.1)', borderRadius: '10px' },
   spinner: { width: '18px', height: '18px', border: '2px solid rgba(167,139,250,0.3)', borderTop: '2px solid #a78bfa', borderRadius: '50%', animation: 'spin 1s linear infinite', flexShrink: 0 },
