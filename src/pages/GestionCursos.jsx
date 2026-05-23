@@ -183,10 +183,12 @@ export default function GestionCursos() {
     reader.readAsText(file, 'latin1');
   });
 
+  // ── CORRECCIÓN: async + await extraído fuera del setter ──────────────────
   const handleEnunciadoPDF = async (e) => {
     const file = e.target.files[0]; if (!file) return;
     setLeyendoAct(true);
-    setFormAct(f => ({ ...f, enunciadoTexto: await leerPDFActividad(file), enunciadoNombre: file.name }));
+    const texto = await leerPDFActividad(file);
+    setFormAct(f => ({ ...f, enunciadoTexto: texto, enunciadoNombre: file.name }));
     setLeyendoAct(false);
   };
 
@@ -608,13 +610,11 @@ export default function GestionCursos() {
                 No hay entregas{filtroAlumno || filtroTipo ? ' con ese filtro' : ' aún'}
               </p>
             ) : (
-              /* ── SCROLL VISIBLE ── */
               <div style={{
                 display: 'flex', flexDirection: 'column', gap: '10px',
                 maxHeight: '58vh',
                 overflowY: 'scroll',
                 paddingRight: '8px',
-                /* Scrollbar siempre visible y estilizada */
                 scrollbarWidth: 'thin',
                 scrollbarColor: 'rgba(167,139,250,0.5) rgba(255,255,255,0.06)',
               }}>
