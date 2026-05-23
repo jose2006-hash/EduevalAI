@@ -11,6 +11,7 @@ import {
   actualizarEntregaAlumno,
   actualizarActividad,
 } from '../firebase/services.js';
+import { generarReporteEstadistico } from '../openai/evaluador.js';
 import { useAuth } from '../components/AuthContext.jsx';
 
 const TIPOS_DEFAULT = [
@@ -19,6 +20,21 @@ const TIPOS_DEFAULT = [
   { nombre: 'Participación', peso: 20 },
   { nombre: 'Otros', peso: 10 },
 ];
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+const iaBadgeStyle = (pct) => {
+  if (pct === null || pct === undefined) return null;
+  const bg = pct >= 81 ? 'rgba(239,68,68,0.18)' : pct >= 56 ? 'rgba(245,158,11,0.18)' : pct >= 26 ? 'rgba(99,102,241,0.18)' : 'rgba(34,197,94,0.15)';
+  const color = pct >= 81 ? '#ef4444' : pct >= 56 ? '#f59e0b' : pct >= 26 ? '#818cf8' : '#22c55e';
+  return { background: bg, color, border: `1px solid ${color}44`, padding: '2px 7px', borderRadius: '6px', fontSize: '10px', fontWeight: '700', whiteSpace: 'nowrap' };
+};
+const iaLabel = (pct) => {
+  if (pct === null || pct === undefined) return null;
+  if (pct >= 81) return `🤖 ${pct}% IA`;
+  if (pct >= 56) return `⚠️ ${pct}% IA`;
+  if (pct >= 26) return `🔍 ${pct}% IA`;
+  return `✅ ${pct}% IA`;
+};
 
 export default function GestionCursos() {
   const { userData } = useAuth();
@@ -47,7 +63,7 @@ export default function GestionCursos() {
   });
   const [leyendoAct, setLeyendoAct] = useState(false);
 
-  // Ver entregas de alumnos
+  // Entregas
   const [cursoEntregas, setCursoEntregas] = useState(null);
   const [entregas, setEntregas] = useState([]);
   const [entregaDetalle, setEntregaDetalle] = useState(null);
@@ -61,6 +77,13 @@ export default function GestionCursos() {
   const [comentarioDocente, setComentarioDocente] = useState('');
   const [guardandoNota, setGuardandoNota] = useState(false);
   const [msgNota, setMsgNota] = useState('');
+
+  // Reporte estadístico
+  const [showReporte, setShowReporte] = useState(false);
+  const [reporte, setReporte] = useState(null);
+  const [generandoReporte, setGenerandoReporte] = useState(false);
+  const [msgReporte, setMsgReporte] = useState('');
+  const [tabReporte, setTabReporte] = useState('resumen'); // resumen | alumnos | temas | plan
 
   const [form, setForm] = useState({
     nombre: '', seccion: '', codigo: '', descripcion: '', ciclo: '',
@@ -78,8 +101,7 @@ export default function GestionCursos() {
   const abrirSolicitudes = async (curso) => {
     setCursoPendientes(curso);
     const [pends, todos] = await Promise.all([
-      getPendientesByCurso(curso.id),
-      getMatriculasByCurso(curso.id),
+      getPendientesByCurso(curso.id), getMatriculasByCurso(curso.id),
     ]);
     setPendientes(pends);
     setAprobados(todos.filter(m => m.estado === 'aprobado'));
@@ -95,99 +117,59 @@ export default function GestionCursos() {
   const ejecutarConfirm = async () => {
     if (!confirm) return;
     try {
-      if (confirm.tipo === 'alumno') {
-        await eliminarMatricula(confirm.id);
-        await abrirSolicitudes(cursoPendientes);
-        setMsg('✅ Alumno eliminado del curso');
-      } else if (confirm.tipo === 'actividad') {
-        await eliminarActividad(confirm.id);
-        const acts = await getActividadesByCurso(cursoActividades.id);
-        setActividades(acts);
-        setMsgAct('✅ Actividad eliminada');
-      } else if (confirm.tipo === 'curso') {
-        await eliminarCurso(confirm.id);
-        await cargarCursos();
-        setMsg('✅ Curso eliminado');
-      } else if (confirm.tipo === 'entrega') {
-        await eliminarEntrega(confirm.id);
-        setEntregaDetalle(null);
-        const ents = await getEntregasByCurso(cursoEntregas.id);
-        setEntregas(ents);
-        setMsg('✅ Entrega eliminada');
-      }
+      if (confirm.tipo === 'alumno') { await eliminarMatricula(confirm.id); await abrirSolicitudes(cursoPendientes); setMsg('✅ Alumno eliminado'); }
+      else if (confirm.tipo === 'actividad') { await eliminarActividad(confirm.id); setActividades(await getActividadesByCurso(cursoActividades.id)); setMsgAct('✅ Actividad eliminada'); }
+      else if (confirm.tipo === 'curso') { await eliminarCurso(confirm.id); await cargarCursos(); setMsg('✅ Curso eliminado'); }
+      else if (confirm.tipo === 'entrega') { await eliminarEntrega(confirm.id); setEntregaDetalle(null); setEntregas(await getEntregasByCurso(cursoEntregas.id)); setMsg('✅ Entrega eliminada'); }
     } catch (err) { setMsg('❌ Error: ' + err.message); }
     setConfirm(null);
   };
 
-  const handleEditarActividad = (a) => {
-    setEditingActividadId(a.id);
-    setEditFecha(a.fechaLimite || '');
-  };
+  const handleEditarActividad = (a) => { setEditingActividadId(a.id); setEditFecha(a.fechaLimite || ''); };
   const handleCancelarEditar = () => { setEditingActividadId(null); setEditFecha(''); };
   const handleGuardarFecha = async () => {
     if (!editingActividadId) return;
     try {
       setGuardandoAct(true);
       await actualizarActividad(editingActividadId, { fechaLimite: editFecha });
-      const acts = await getActividadesByCurso(cursoActividades.id);
-      setActividades(acts);
+      setActividades(await getActividadesByCurso(cursoActividades.id));
       setMsgAct('✅ Fecha actualizada');
-      setEditingActividadId(null);
-      setEditFecha('');
-    } catch (err) {
-      setMsgAct('❌ ' + (err.message || 'Error actualizando fecha'));
-    } finally { setGuardandoAct(false); }
+      setEditingActividadId(null); setEditFecha('');
+    } catch (err) { setMsgAct('❌ ' + err.message); }
+    finally { setGuardandoAct(false); }
   };
 
   const handleGuardarNota = async () => {
     const nota = parseFloat(notaEditada);
-    if (isNaN(nota) || nota < 0 || nota > 20)
-      return setMsgNota('❌ La nota debe ser un número entre 0 y 20');
+    if (isNaN(nota) || nota < 0 || nota > 20) return setMsgNota('❌ La nota debe ser entre 0 y 20');
     setGuardandoNota(true); setMsgNota('');
     try {
       const porcentaje = Math.round((nota / 20) * 100);
-      let nivelGlobal = 'Insuficiente';
-      if (nota >= 17) nivelGlobal = 'Excelente';
-      else if (nota >= 14) nivelGlobal = 'Bueno';
-      else if (nota >= 11) nivelGlobal = 'Regular';
-      await actualizarEntregaAlumno(entregaDetalle.id, {
-        notaFinal: nota, porcentaje, nivelGlobal,
-        notaEditadaManualmente: true,
-        comentarioDocente: comentarioDocente.trim(),
-        estado: 'evaluado',
-      });
+      const nivelGlobal = nota >= 17 ? 'Excelente' : nota >= 14 ? 'Bueno' : nota >= 11 ? 'Regular' : 'Insuficiente';
+      await actualizarEntregaAlumno(entregaDetalle.id, { notaFinal: nota, porcentaje, nivelGlobal, notaEditadaManualmente: true, comentarioDocente: comentarioDocente.trim(), estado: 'evaluado' });
       const entregaActualizada = { ...entregaDetalle, notaFinal: nota, porcentaje, nivelGlobal, notaEditadaManualmente: true, comentarioDocente: comentarioDocente.trim(), estado: 'evaluado' };
       setEntregaDetalle(entregaActualizada);
-      const ents = await getEntregasByCurso(cursoEntregas.id);
-      setEntregas(ents);
-      setMsgNota('✅ Nota guardada correctamente');
-      setEditandoNota(false);
-    } catch (err) { setMsgNota('❌ Error al guardar: ' + err.message); }
+      setEntregas(await getEntregasByCurso(cursoEntregas.id));
+      setMsgNota('✅ Nota guardada'); setEditandoNota(false);
+    } catch (err) { setMsgNota('❌ Error: ' + err.message); }
     finally { setGuardandoNota(false); }
   };
 
-  const abrirEditarNota = () => {
-    setNotaEditada(String(entregaDetalle.notaFinal ?? ''));
-    setComentarioDocente(entregaDetalle.comentarioDocente || '');
-    setMsgNota(''); setEditandoNota(true);
-  };
+  const abrirEditarNota = () => { setNotaEditada(String(entregaDetalle.notaFinal ?? '')); setComentarioDocente(entregaDetalle.comentarioDocente || ''); setMsgNota(''); setEditandoNota(true); };
 
   const abrirEntregas = async (curso) => {
     setCursoEntregas(curso);
     setFiltroAlumno(''); setFiltroTipo('');
     setEntregaDetalle(null); setEditandoNota(false); setMsgNota('');
-    setGruposExpandidos({});
+    setGruposExpandidos({}); setReporte(null); setShowReporte(false);
     const ents = await getEntregasByCurso(curso.id);
     ents.sort((a, b) => (b.creadoEn?.seconds || 0) - (a.creadoEn?.seconds || 0));
     setEntregas(ents);
   };
 
   const abrirActividades = async (curso) => {
-    setCursoActividades(curso);
-    setShowActForm(false); setMsgAct('');
-    const [acts, rubs] = await Promise.all([
-      getActividadesByCurso(curso.id), getRubricas(curso.id),
-    ]);
+    setCursoActividades(curso); setShowActForm(false); setMsgAct('');
+    const [acts, rubs] = await Promise.all([getActividadesByCurso(curso.id), getRubricas(curso.id)]);
     setActividades(acts); setRubricas(rubs);
     setFormAct(f => ({ ...f, tipoEvaluacion: curso.tiposEvaluacion?.[0]?.nombre || '', fechaLimite: '' }));
   };
@@ -195,55 +177,40 @@ export default function GestionCursos() {
   const leerPDFActividad = (file) => new Promise((resolve) => {
     const reader = new FileReader();
     reader.onload = (ev) => {
-      const text = ev.target.result
-        .replace(/[^\x20-\x7E\xA0-\xFF\n]/g, ' ')
-        .replace(/\s{3,}/g, '\n').substring(0, 8000);
+      const text = ev.target.result.replace(/[^\x20-\x7E\xA0-\xFF\n]/g, ' ').replace(/\s{3,}/g, '\n').substring(0, 8000);
       resolve(text);
     };
     reader.readAsText(file, 'latin1');
   });
 
   const handleEnunciadoPDF = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+    const file = e.target.files[0]; if (!file) return;
     setLeyendoAct(true);
-    const texto = await leerPDFActividad(file);
-    setFormAct(f => ({ ...f, enunciadoTexto: texto, enunciadoNombre: file.name }));
+    setFormAct(f => ({ ...f, enunciadoTexto: await leerPDFActividad(file), enunciadoNombre: file.name }));
     setLeyendoAct(false);
   };
 
   const handleGuardarActividad = async () => {
     if (!formAct.titulo.trim()) return setMsgAct('❌ El título es obligatorio');
     if (!formAct.tipoEvaluacion) return setMsgAct('❌ Selecciona el tipo de evaluación');
-    if (!formAct.enunciadoTexto.trim() && !formAct.descripcion.trim())
-      return setMsgAct('❌ Agrega una descripción o sube el enunciado en PDF');
+    if (!formAct.enunciadoTexto.trim() && !formAct.descripcion.trim()) return setMsgAct('❌ Agrega descripción o enunciado');
     setGuardandoAct(true); setMsgAct('');
     try {
-      await crearActividad({
-        ...formAct,
-        cursoId: cursoActividades.id,
-        cursoNombre: cursoActividades.nombre,
-        docenteUid: userData.uid,
-        docenteNombre: userData.nombre,
-      });
+      await crearActividad({ ...formAct, cursoId: cursoActividades.id, cursoNombre: cursoActividades.nombre, docenteUid: userData.uid, docenteNombre: userData.nombre });
       setMsgAct(`✅ Actividad "${formAct.titulo}" publicada`);
       setShowActForm(false);
       setFormAct({ titulo: '', tipoEvaluacion: cursoActividades.tiposEvaluacion?.[0]?.nombre || '', descripcion: '', enunciadoTexto: '', enunciadoNombre: '', rubricaId: '', fechaLimite: '' });
-      const acts = await getActividadesByCurso(cursoActividades.id);
-      setActividades(acts);
+      setActividades(await getActividadesByCurso(cursoActividades.id));
     } catch (err) { setMsgAct('❌ Error: ' + err.message); }
     finally { setGuardandoAct(false); }
   };
 
   const handleSilaboPDF = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+    const file = e.target.files[0]; if (!file) return;
     setLeyendoPDF(true);
     const reader = new FileReader();
     reader.onload = (ev) => {
-      const text = ev.target.result
-        .replace(/[^\x20-\x7E\xA0-\xFF\n]/g, ' ')
-        .replace(/\s{3,}/g, '\n').substring(0, 8000);
+      const text = ev.target.result.replace(/[^\x20-\x7E\xA0-\xFF\n]/g, ' ').replace(/\s{3,}/g, '\n').substring(0, 8000);
       setForm(f => ({ ...f, silaboTexto: text, silaboNombre: file.name }));
       setLeyendoPDF(false);
     };
@@ -259,28 +226,35 @@ export default function GestionCursos() {
   const totalPeso = form.tiposEvaluacion.reduce((s, t) => s + (t.peso || 0), 0);
 
   const handleGuardar = async () => {
-    if (!form.nombre.trim()) return setMsg('❌ El nombre del curso es obligatorio');
-    if (!form.seccion.trim()) return setMsg('❌ La sección es obligatoria');
-    if (!form.codigo.trim()) return setMsg('❌ El código del curso es obligatorio');
-    if (totalPeso !== 100) return setMsg(`❌ Los pesos deben sumar 100% (actualmente: ${totalPeso}%)`);
+    if (!form.nombre.trim()) return setMsg('❌ Nombre obligatorio');
+    if (!form.seccion.trim()) return setMsg('❌ Sección obligatoria');
+    if (!form.codigo.trim()) return setMsg('❌ Código obligatorio');
+    if (totalPeso !== 100) return setMsg(`❌ Los pesos deben sumar 100% (ahora: ${totalPeso}%)`);
     setGuardando(true); setMsg('');
     try {
       await crearCurso({ ...form, docenteUid: userData.uid, docenteNombre: userData.nombre });
-      setMsg(`✅ Curso "${form.nombre} - Sección ${form.seccion}" creado`);
-      await cargarCursos();
-      setShowForm(false);
+      setMsg(`✅ Curso "${form.nombre}" creado`);
+      await cargarCursos(); setShowForm(false);
       setForm({ nombre: '', seccion: '', codigo: '', descripcion: '', ciclo: '', silaboTexto: '', silaboNombre: '', tiposEvaluacion: TIPOS_DEFAULT });
     } catch (err) { setMsg('❌ Error: ' + err.message); }
     finally { setGuardando(false); }
   };
 
+  // ── Reporte estadístico ───────────────────────────────────────────────────
+  const handleGenerarReporte = async () => {
+    setGenerandoReporte(true); setMsgReporte(''); setTabReporte('resumen');
+    try {
+      const resultado = await generarReporteEstadistico(entregas, cursoEntregas.nombre, userData.nombre);
+      setReporte(resultado);
+      setShowReporte(true);
+    } catch (err) { setMsgReporte('❌ ' + err.message); }
+    finally { setGenerandoReporte(false); }
+  };
+
   const fechaLimiteDisplay = (fechaStr) => {
     if (!fechaStr) return null;
-    const fecha = new Date(fechaStr);
-    const hoy = new Date();
-    const vencida = fecha < hoy;
-    const diff = Math.ceil((fecha - hoy) / (1000 * 60 * 60 * 24));
-    return { fecha, vencida, diff };
+    const fecha = new Date(fechaStr); const hoy = new Date();
+    return { fecha, vencida: fecha < hoy, diff: Math.ceil((fecha - hoy) / (1000 * 60 * 60 * 24)) };
   };
 
   const nivelColor = (nota) => {
@@ -293,23 +267,19 @@ export default function GestionCursos() {
 
   const esDocxArchivo = (nombre) => nombre?.toLowerCase().endsWith('.docx');
 
-  // ── Agrupación de entregas por tema ──────────────────────────────────────────
-  // Clave de grupo: actividadTitulo si existe, si no el titulo de la entrega,
-  // si no "Sin tema". Dentro de cada grupo: ordenar por nota desc.
+  // ── Agrupación de entregas ────────────────────────────────────────────────
   const entregasFiltradas = entregas.filter(e => {
     const matchAlumno = !filtroAlumno || e.alumnoNombre?.toLowerCase().includes(filtroAlumno.toLowerCase());
     const matchTipo = !filtroTipo || e.tipoEvaluacion === filtroTipo;
     return matchAlumno && matchTipo;
   });
 
-  // Construir grupos ordenados
   const gruposMap = {};
   entregasFiltradas.forEach(e => {
     const key = e.actividadTitulo?.trim() || e.titulo?.trim() || 'Sin tema';
     if (!gruposMap[key]) gruposMap[key] = [];
     gruposMap[key].push(e);
   });
-  // Dentro de cada grupo, ordenar: evaluados de mayor a menor nota, luego pendientes
   Object.keys(gruposMap).forEach(key => {
     gruposMap[key].sort((a, b) => {
       if (a.estado === 'evaluado' && b.estado !== 'evaluado') return -1;
@@ -317,22 +287,19 @@ export default function GestionCursos() {
       return (b.notaFinal ?? -1) - (a.notaFinal ?? -1);
     });
   });
-  // Ordenar grupos: el que tiene más entregas primero
   const grupos = Object.entries(gruposMap).sort((a, b) => b[1].length - a[1].length);
-
-  const toggleGrupo = (key) =>
-    setGruposExpandidos(prev => ({ ...prev, [key]: !prev[key] }));
-
+  const toggleGrupo = (key) => setGruposExpandidos(prev => ({ ...prev, [key]: !prev[key] }));
   const tiposUnicos = [...new Set(entregas.map(e => e.tipoEvaluacion).filter(Boolean))];
 
-  // Stats por grupo
   const grupoStats = (items) => {
     const ev = items.filter(e => e.estado === 'evaluado');
-    const prom = ev.length
-      ? (ev.reduce((s, e) => s + (e.notaFinal || 0), 0) / ev.length).toFixed(1)
-      : null;
+    const prom = ev.length ? (ev.reduce((s, e) => s + (e.notaFinal || 0), 0) / ev.length).toFixed(1) : null;
     return { total: items.length, evaluados: ev.length, promedio: prom };
   };
+
+  // Color de perfil en reporte
+  const perfilColor = (p) => p === 'Excelente' ? '#22c55e' : p === 'Bueno' ? '#3b82f6' : p === 'Regular' ? '#f59e0b' : '#ef4444';
+  const prioridadColor = (p) => p === 'Alta' ? '#ef4444' : p === 'Media' ? '#f59e0b' : '#22c55e';
 
   return (
     <div style={s.container}>
@@ -342,11 +309,7 @@ export default function GestionCursos() {
         <button style={s.primaryBtn} onClick={() => setShowForm(true)}>+ Nuevo Curso</button>
       </header>
 
-      {msg && (
-        <div style={{ color: msg.includes('✅') ? '#22c55e' : '#ef4444', marginBottom: '16px', fontSize: '14px', background: msg.includes('✅') ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)', padding: '12px 16px', borderRadius: '10px' }}>
-          {msg}
-        </div>
-      )}
+      {msg && <div style={{ color: msg.includes('✅') ? '#22c55e' : '#ef4444', marginBottom: '16px', fontSize: '14px', background: msg.includes('✅') ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)', padding: '12px 16px', borderRadius: '10px' }}>{msg}</div>}
 
       <div style={s.grid}>
         {cursos.map((c, i) => (
@@ -355,16 +318,12 @@ export default function GestionCursos() {
               <span style={s.cursoIcon}>📚</span>
               <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                 {c.seccion && <span style={s.seccionBadge}>Sección {c.seccion}</span>}
-                <button style={s.deleteCursoBtn} title="Eliminar curso" onClick={() => handleEliminarCurso(c)}>🗑</button>
+                <button style={s.deleteCursoBtn} onClick={() => handleEliminarCurso(c)}>🗑</button>
               </div>
             </div>
             <h3 style={s.cursoNombre}>{c.nombre}</h3>
             <p style={s.cursoCiclo}>{c.ciclo && `${c.ciclo} · `}{c.descripcion}</p>
-            <div style={s.tiposList}>
-              {c.tiposEvaluacion?.map((t, j) => (
-                <span key={j} style={s.tipoTag}>{t.nombre} {t.peso}%</span>
-              ))}
-            </div>
+            <div style={s.tiposList}>{c.tiposEvaluacion?.map((t, j) => <span key={j} style={s.tipoTag}>{t.nombre} {t.peso}%</span>)}</div>
             {c.silaboNombre && <p style={s.silaboTag}>📄 {c.silaboNombre}</p>}
             <div style={s.infoBox}>
               <p style={s.infoLabel}>Los alumnos ingresan con:</p>
@@ -377,11 +336,7 @@ export default function GestionCursos() {
             </div>
           </div>
         ))}
-        {cursos.length === 0 && (
-          <p style={{ color: 'rgba(255,255,255,0.3)', gridColumn: '1/-1', textAlign: 'center', padding: '48px' }}>
-            No tienes cursos. Crea el primero.
-          </p>
-        )}
+        {cursos.length === 0 && <p style={{ color: 'rgba(255,255,255,0.3)', gridColumn: '1/-1', textAlign: 'center', padding: '48px' }}>No tienes cursos. Crea el primero.</p>}
       </div>
 
       {/* ── Modal confirmación ── */}
@@ -403,152 +358,346 @@ export default function GestionCursos() {
         </div>
       )}
 
-      {/* ── Modal entregas agrupadas por tema ── */}
-      {cursoEntregas && !entregaDetalle && (
+      {/* ── Modal reporte estadístico ── */}
+      {showReporte && reporte && (
         <div style={s.overlay}>
-          <div style={{ ...s.modal, maxWidth: '920px', maxHeight: 'calc(100vh - 80px)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ ...s.modal, maxWidth: '960px' }}>
+            <div style={s.modalHeader}>
+              <div>
+                <h2 style={s.modalTitle}>📊 Reporte Estadístico — {cursoEntregas?.nombre}</h2>
+                <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '13px', margin: 0 }}>Generado por IA · {entregas.filter(e => e.estado === 'evaluado').length} entregas evaluadas</p>
+              </div>
+              <button style={s.closeBtn} onClick={() => setShowReporte(false)}>✕</button>
+            </div>
+
+            {/* Tabs */}
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '20px', flexWrap: 'wrap' }}>
+              {[
+                { id: 'resumen', label: '📋 Resumen' },
+                { id: 'temas', label: '📚 Temas' },
+                { id: 'alumnos', label: '👥 Alumnos' },
+                { id: 'plan', label: '🎯 Plan de acción' },
+              ].map(tab => (
+                <button key={tab.id} style={{ ...s.tabBtn, ...(tabReporte === tab.id ? s.tabBtnActive : {}) }}
+                  onClick={() => setTabReporte(tab.id)}>{tab.label}</button>
+              ))}
+            </div>
+
+            <div style={{ maxHeight: '65vh', overflowY: 'auto', paddingRight: '4px' }}>
+
+              {/* ── Tab Resumen ── */}
+              {tabReporte === 'resumen' && (
+                <div>
+                  {/* Stats */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: '12px', marginBottom: '20px' }}>
+                    {[
+                      { label: 'Promedio', val: `${reporte.estadisticas?.promedioGeneral}/20`, color: nivelColor(reporte.estadisticas?.promedioGeneral) },
+                      { label: 'Aprobación', val: `${reporte.estadisticas?.tasaAprobacion}%`, color: reporte.estadisticas?.tasaAprobacion >= 70 ? '#22c55e' : '#f59e0b' },
+                      { label: 'Excelentes', val: reporte.estadisticas?.distribucion?.Excelente || 0, color: '#22c55e' },
+                      { label: 'En riesgo', val: reporte.estadisticas?.distribucion?.Insuficiente || 0, color: '#ef4444' },
+                    ].map((st, i) => (
+                      <div key={i} style={{ background: 'rgba(255,255,255,0.04)', borderRadius: '12px', padding: '16px', textAlign: 'center', border: '1px solid rgba(255,255,255,0.08)' }}>
+                        <div style={{ fontSize: '22px', fontWeight: '800', color: st.color }}>{st.val}</div>
+                        <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: '11px', marginTop: '4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{st.label}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {/* Resumen ejecutivo */}
+                  <div style={{ background: 'rgba(102,126,234,0.08)', border: '1px solid rgba(102,126,234,0.2)', borderRadius: '12px', padding: '16px', marginBottom: '16px' }}>
+                    <p style={{ color: '#a78bfa', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 8px' }}>Diagnóstico general</p>
+                    <p style={{ color: 'rgba(255,255,255,0.8)', fontSize: '14px', lineHeight: '1.7', margin: 0 }}>{reporte.resumenEjecutivo}</p>
+                  </div>
+                  {/* Distribución */}
+                  <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '12px', padding: '16px' }}>
+                    <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 12px' }}>Distribución de niveles</p>
+                    {Object.entries(reporte.estadisticas?.distribucion || {}).map(([nivel, cant]) => {
+                      const total = Object.values(reporte.estadisticas?.distribucion || {}).reduce((a, b) => a + b, 0);
+                      const pct = total > 0 ? Math.round((cant / total) * 100) : 0;
+                      const col = nivel === 'Excelente' ? '#22c55e' : nivel === 'Bueno' ? '#3b82f6' : nivel === 'Regular' ? '#f59e0b' : '#ef4444';
+                      return (
+                        <div key={nivel} style={{ marginBottom: '10px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                            <span style={{ color: '#fff', fontSize: '13px' }}>{nivel}</span>
+                            <span style={{ color: col, fontWeight: '600', fontSize: '13px' }}>{cant} ({pct}%)</span>
+                          </div>
+                          <div style={{ height: '6px', background: 'rgba(255,255,255,0.08)', borderRadius: '3px', overflow: 'hidden' }}>
+                            <div style={{ height: '100%', width: `${pct}%`, background: col, borderRadius: '3px', transition: 'width 0.6s ease' }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* ── Tab Temas ── */}
+              {tabReporte === 'temas' && (
+                <div>
+                  {reporte.temasCriticos?.length > 0 && (
+                    <div style={{ marginBottom: '20px' }}>
+                      <h3 style={s.subTitle}>🔴 Temas críticos (requieren refuerzo urgente)</h3>
+                      {reporte.temasCriticos.map((t, i) => (
+                        <div key={i} style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.18)', borderRadius: '12px', padding: '16px', marginBottom: '10px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                            <span style={{ color: '#fff', fontWeight: '700', fontSize: '14px' }}>{t.tema}</span>
+                            <div style={{ display: 'flex', gap: '10px' }}>
+                              <span style={{ color: nivelColor(t.promedio), fontWeight: '700', fontSize: '14px' }}>{t.promedio}/20</span>
+                              <span style={{ color: '#f59e0b', fontSize: '12px' }}>{t.tasaAprobacion}% aprob.</span>
+                            </div>
+                          </div>
+                          <p style={{ color: 'rgba(255,255,255,0.6)', fontSize: '13px', margin: '0 0 8px' }}>{t.diagnostico}</p>
+                          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                            {t.estrategiasDocente?.map((est, j) => (
+                              <span key={j} style={{ background: 'rgba(239,68,68,0.12)', color: '#fca5a5', padding: '3px 10px', borderRadius: '6px', fontSize: '11px' }}>💡 {est}</span>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {reporte.temasDestacados?.length > 0 && (
+                    <div>
+                      <h3 style={s.subTitle}>🟢 Temas destacados</h3>
+                      {reporte.temasDestacados.map((t, i) => (
+                        <div key={i} style={{ background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.15)', borderRadius: '12px', padding: '14px 16px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div>
+                            <span style={{ color: '#fff', fontWeight: '600', fontSize: '13px' }}>{t.tema}</span>
+                            <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '12px', margin: '4px 0 0' }}>{t.observacion}</p>
+                          </div>
+                          <span style={{ color: '#22c55e', fontWeight: '800', fontSize: '16px', flexShrink: 0, marginLeft: '12px' }}>{t.promedio}/20</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ── Tab Alumnos ── */}
+              {tabReporte === 'alumnos' && (
+                <div>
+                  <h3 style={s.subTitle}>Reporte individual por alumno</h3>
+                  {reporte.reporteAlumnos?.sort((a, b) => a.promedio - b.promedio).map((al, i) => (
+                    <div key={i} style={{ background: 'rgba(255,255,255,0.03)', border: `1px solid ${perfilColor(al.perfil)}33`, borderRadius: '12px', padding: '16px', marginBottom: '10px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+                        <div>
+                          <span style={{ color: '#fff', fontWeight: '700', fontSize: '14px' }}>{al.alumno}</span>
+                          <span style={{ marginLeft: '10px', background: `${perfilColor(al.perfil)}22`, color: perfilColor(al.perfil), padding: '2px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: '600' }}>{al.perfil}</span>
+                        </div>
+                        <span style={{ color: nivelColor(al.promedio), fontWeight: '800', fontSize: '16px' }}>{al.promedio}/20</span>
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+                        {al.fortalezas?.length > 0 && (
+                          <div>
+                            <p style={{ color: '#22c55e', fontSize: '11px', margin: '0 0 4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Fortalezas</p>
+                            {al.fortalezas.map((f, j) => <p key={j} style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px', margin: '0 0 2px' }}>• {f}</p>)}
+                          </div>
+                        )}
+                        {al.debilidades?.length > 0 && (
+                          <div>
+                            <p style={{ color: '#f59e0b', fontSize: '11px', margin: '0 0 4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Áreas a mejorar</p>
+                            {al.debilidades.map((d, j) => <p key={j} style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px', margin: '0 0 2px' }}>• {d}</p>)}
+                          </div>
+                        )}
+                      </div>
+                      {al.recomendacionPersonalizada && (
+                        <div style={{ background: 'rgba(102,126,234,0.08)', borderRadius: '8px', padding: '10px 12px' }}>
+                          <p style={{ color: '#a78bfa', fontSize: '11px', margin: '0 0 4px' }}>💬 Recomendación</p>
+                          <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: '12px', margin: 0, fontStyle: 'italic' }}>{al.recomendacionPersonalizada}</p>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* ── Tab Plan ── */}
+              {tabReporte === 'plan' && (
+                <div>
+                  {reporte.recomendacionesDocente?.length > 0 && (
+                    <div style={{ marginBottom: '20px' }}>
+                      <h3 style={s.subTitle}>Acciones recomendadas para el docente</h3>
+                      {reporte.recomendacionesDocente.map((r, i) => (
+                        <div key={i} style={{ background: 'rgba(255,255,255,0.03)', border: `1px solid ${prioridadColor(r.prioridad)}33`, borderRadius: '12px', padding: '14px 16px', marginBottom: '10px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
+                            <span style={{ background: `${prioridadColor(r.prioridad)}22`, color: prioridadColor(r.prioridad), padding: '2px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: '700' }}>{r.prioridad}</span>
+                            <span style={{ color: '#fff', fontWeight: '600', fontSize: '13px' }}>{r.accion}</span>
+                          </div>
+                          <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '12px', margin: 0 }}>{r.justificacion}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {reporte.planRefuerzo && (
+                    <div style={{ background: 'rgba(102,126,234,0.06)', border: '1px solid rgba(102,126,234,0.15)', borderRadius: '12px', padding: '16px' }}>
+                      <h3 style={{ ...s.subTitle, marginTop: 0 }}>🎯 Plan de refuerzo</h3>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                        <div>
+                          <p style={{ color: '#a78bfa', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 8px' }}>Temas a reforzar</p>
+                          {reporte.planRefuerzo.temasReforzar?.map((t, i) => <p key={i} style={{ color: 'rgba(255,255,255,0.7)', fontSize: '13px', margin: '0 0 4px' }}>📌 {t}</p>)}
+                        </div>
+                        <div>
+                          <p style={{ color: '#a78bfa', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 8px' }}>Metodologías sugeridas</p>
+                          {reporte.planRefuerzo.metodologiasSugeridas?.map((m, i) => <p key={i} style={{ color: 'rgba(255,255,255,0.7)', fontSize: '13px', margin: '0 0 4px' }}>💡 {m}</p>)}
+                        </div>
+                      </div>
+                      {reporte.planRefuerzo.alumnosEnRiesgo?.length > 0 && (
+                        <div style={{ marginTop: '16px', background: 'rgba(239,68,68,0.08)', borderRadius: '10px', padding: '12px' }}>
+                          <p style={{ color: '#ef4444', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 8px' }}>⚠️ Alumnos en riesgo</p>
+                          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                            {reporte.planRefuerzo.alumnosEnRiesgo.map((a, i) => (
+                              <span key={i} style={{ background: 'rgba(239,68,68,0.15)', color: '#fca5a5', padding: '3px 10px', borderRadius: '6px', fontSize: '12px' }}>{a}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <button style={{ ...s.primaryBtn, width: '100%', marginTop: '20px' }} onClick={() => setShowReporte(false)}>Cerrar reporte</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal entregas agrupadas ── */}
+      {cursoEntregas && !entregaDetalle && !showReporte && (
+        <div style={s.overlay}>
+          <div style={{ ...s.modal, maxWidth: '940px' }}>
             <div style={s.modalHeader}>
               <div>
                 <h2 style={s.modalTitle}>📋 Entregas — {cursoEntregas.nombre}</h2>
                 <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '13px', margin: 0 }}>
-                  Sección {cursoEntregas.seccion} · {cursoEntregas.ciclo} · {entregas.length} entrega{entregas.length !== 1 ? 's' : ''} · {grupos.length} tema{grupos.length !== 1 ? 's' : ''}
+                  Sección {cursoEntregas.seccion} · {cursoEntregas.ciclo} · {entregas.length} entregas · {grupos.length} temas
                 </p>
               </div>
               <button style={s.closeBtn} onClick={() => setCursoEntregas(null)}>✕</button>
             </div>
 
-            {/* Filtros */}
-            <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', flexWrap: 'wrap' }}>
-              <input
-                style={{ ...s.input, flex: 1, minWidth: '160px' }}
+            {/* Filtros + acciones */}
+            <div style={{ display: 'flex', gap: '10px', marginBottom: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
+              <input style={{ ...s.input, flex: 1, minWidth: '160px' }}
                 placeholder="🔍 Buscar alumno..."
-                value={filtroAlumno}
-                onChange={e => setFiltroAlumno(e.target.value)}
-              />
+                value={filtroAlumno} onChange={e => setFiltroAlumno(e.target.value)} />
               <select style={{ ...s.select, width: '180px' }} value={filtroTipo}
                 onChange={e => setFiltroTipo(e.target.value)}>
                 <option value="">Todos los tipos</option>
                 {tiposUnicos.map(t => <option key={t} value={t}>{t}</option>)}
               </select>
               {grupos.length > 1 && (
-                <button style={s.secondaryBtn}
-                  onClick={() => {
-                    const allExpanded = grupos.every(([k]) => gruposExpandidos[k] !== false);
-                    const next = {};
-                    grupos.forEach(([k]) => { next[k] = !allExpanded; });
-                    setGruposExpandidos(next);
-                  }}>
-                  {grupos.every(([k]) => gruposExpandidos[k] !== false) ? '⊖ Colapsar todo' : '⊕ Expandir todo'}
+                <button style={s.secondaryBtn} onClick={() => {
+                  const allExp = grupos.every(([k]) => gruposExpandidos[k] !== false);
+                  const next = {}; grupos.forEach(([k]) => { next[k] = !allExp; });
+                  setGruposExpandidos(next);
+                }}>
+                  {grupos.every(([k]) => gruposExpandidos[k] !== false) ? '⊖ Colapsar' : '⊕ Expandir'}
                 </button>
               )}
+              <button
+                style={{ ...s.primaryBtn, background: 'linear-gradient(135deg,#7c3aed,#4f46e5)', opacity: generandoReporte ? 0.7 : 1 }}
+                onClick={handleGenerarReporte}
+                disabled={generandoReporte}>
+                {generandoReporte ? '⏳ Generando...' : '📊 Reporte IA'}
+              </button>
             </div>
+            {msgReporte && <p style={{ color: '#ef4444', fontSize: '13px', margin: '0 0 12px' }}>{msgReporte}</p>}
 
             {grupos.length === 0 ? (
               <p style={{ color: 'rgba(255,255,255,0.3)', textAlign: 'center', padding: '40px' }}>
                 No hay entregas{filtroAlumno || filtroTipo ? ' con ese filtro' : ' aún'}
               </p>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: 'calc(100vh - 320px)', overflowY: 'auto', paddingRight: '8px' }}>
+              /* ── SCROLL VISIBLE ── */
+              <div style={{
+                display: 'flex', flexDirection: 'column', gap: '10px',
+                maxHeight: '58vh',
+                overflowY: 'scroll',
+                paddingRight: '8px',
+                /* Scrollbar siempre visible y estilizada */
+                scrollbarWidth: 'thin',
+                scrollbarColor: 'rgba(167,139,250,0.5) rgba(255,255,255,0.06)',
+              }}>
                 {grupos.map(([tema, items]) => {
-                  const expandido = gruposExpandidos[tema] !== false; // por defecto expandido
+                  const expandido = gruposExpandidos[tema] !== false;
                   const stats = grupoStats(items);
-                  const promColor = stats.promedio
-                    ? parseFloat(stats.promedio) >= 14 ? '#22c55e'
-                      : parseFloat(stats.promedio) >= 11 ? '#f59e0b' : '#ef4444'
-                    : 'rgba(255,255,255,0.3)';
+                  const promColor = stats.promedio ? nivelColor(parseFloat(stats.promedio)) : 'rgba(255,255,255,0.3)';
 
                   return (
                     <div key={tema} style={s.grupoCard}>
-                      {/* Cabecera del grupo — clickable */}
-                      <button
-                        style={s.grupoHeader}
-                        onClick={() => toggleGrupo(tema)}
-                      >
+                      <button style={s.grupoHeader} onClick={() => toggleGrupo(tema)}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: 0 }}>
-                          <span style={{ fontSize: '16px' }}>{expandido ? '▾' : '▸'}</span>
-                          <span style={{ color: '#fff', fontWeight: '700', fontSize: '14px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {tema}
-                          </span>
+                          <span style={{ fontSize: '14px', color: 'rgba(255,255,255,0.5)', flexShrink: 0 }}>{expandido ? '▾' : '▸'}</span>
+                          <span style={{ color: '#fff', fontWeight: '700', fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tema}</span>
                           <span style={s.tipoBadge}>{items[0]?.tipoEvaluacion || '—'}</span>
                         </div>
                         <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flexShrink: 0 }}>
                           {stats.promedio && (
                             <div style={{ textAlign: 'center' }}>
-                              <div style={{ color: promColor, fontWeight: '700', fontSize: '15px' }}>{stats.promedio}/20</div>
+                              <div style={{ color: promColor, fontWeight: '700', fontSize: '14px' }}>{stats.promedio}/20</div>
                               <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '10px' }}>promedio</div>
                             </div>
                           )}
                           <div style={{ textAlign: 'center' }}>
-                            <div style={{ color: '#a78bfa', fontWeight: '700', fontSize: '15px' }}>{stats.evaluados}/{stats.total}</div>
+                            <div style={{ color: '#a78bfa', fontWeight: '700', fontSize: '14px' }}>{stats.evaluados}/{stats.total}</div>
                             <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '10px' }}>evaluados</div>
                           </div>
                         </div>
                       </button>
 
-                      {/* Filas del grupo */}
                       {expandido && (
                         <div style={{ overflowX: 'auto' }}>
                           <table style={{ ...s.table, marginTop: '2px' }}>
                             <thead>
                               <tr>
-                                {['#', 'Alumno', 'Nota', 'Nivel', 'Archivo', 'Fecha', ''].map(h => (
+                                {['#', 'Alumno', 'Nota', 'Nivel', 'IA', 'Archivo', 'Fecha', ''].map(h => (
                                   <th key={h} style={s.th}>{h}</th>
                                 ))}
                               </tr>
                             </thead>
                             <tbody>
-                              {items.map((e, i) => (
-                                <tr key={e.id || i}
-                                  style={{ ...s.tr, cursor: 'pointer' }}
-                                  onClick={() => { setEntregaDetalle(e); setEditandoNota(false); setMsgNota(''); }}>
-                                  <td style={{ ...s.td, width: '32px', color: 'rgba(255,255,255,0.3)', fontWeight: '600' }}>
-                                    {i + 1}
-                                  </td>
-                                  <td style={s.td}>
-                                    <span style={{ color: '#fff', fontWeight: '600', fontSize: '13px' }}>
-                                      {e.alumnoNombre || '—'}
-                                    </span>
-                                  </td>
-                                  <td style={s.td}>
-                                    {e.estado === 'evaluado' ? (
-                                      <span style={{
-                                        ...s.badge,
-                                        background: e.notaFinal >= 14 ? '#22c55e22' : e.notaFinal >= 11 ? '#f59e0b22' : '#ef444422',
-                                        color: e.notaFinal >= 14 ? '#22c55e' : e.notaFinal >= 11 ? '#f59e0b' : '#ef4444',
-                                      }}>
-                                        {e.notaFinal}/20{e.notaEditadaManualmente ? ' ✏️' : ''}
+                              {items.map((e, i) => {
+                                const bs = e.porcentajeIA != null ? iaBadgeStyle(e.porcentajeIA) : null;
+                                return (
+                                  <tr key={e.id || i} style={{ ...s.tr, cursor: 'pointer' }}
+                                    onClick={() => { setEntregaDetalle(e); setEditandoNota(false); setMsgNota(''); }}>
+                                    <td style={{ ...s.td, width: '28px', color: 'rgba(255,255,255,0.3)', fontWeight: '600' }}>{i + 1}</td>
+                                    <td style={s.td}>
+                                      <span style={{ color: '#fff', fontWeight: '600', fontSize: '13px' }}>{e.alumnoNombre || '—'}</span>
+                                    </td>
+                                    <td style={s.td}>
+                                      {e.estado === 'evaluado' ? (
+                                        <span style={{ ...s.badge, background: e.notaFinal >= 14 ? '#22c55e22' : e.notaFinal >= 11 ? '#f59e0b22' : '#ef444422', color: e.notaFinal >= 14 ? '#22c55e' : e.notaFinal >= 11 ? '#f59e0b' : '#ef4444' }}>
+                                          {e.notaFinal}/20{e.notaEditadaManualmente ? ' ✏️' : ''}
+                                        </span>
+                                      ) : <span style={{ color: '#f59e0b', fontSize: '12px' }}>⏳ Pendiente</span>}
+                                    </td>
+                                    <td style={s.td}><span style={{ color: 'rgba(255,255,255,0.55)', fontSize: '12px' }}>{e.nivelGlobal || '—'}</span></td>
+                                    <td style={s.td}>
+                                      {bs ? <span style={bs}>{iaLabel(e.porcentajeIA)}</span> : <span style={{ color: 'rgba(255,255,255,0.2)', fontSize: '11px' }}>—</span>}
+                                    </td>
+                                    <td style={s.td}>
+                                      {e.archivoUrl ? (
+                                        <a href={e.archivoUrl} target="_blank" rel="noreferrer"
+                                          onClick={ev => ev.stopPropagation()}
+                                          style={{ color: '#a78bfa', fontSize: '11px', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '4px', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                          {e.archivoNombre?.toLowerCase().endsWith('.docx') ? '📝' : '📄'} {e.archivoNombre || 'Ver'}
+                                        </a>
+                                      ) : e.archivoNombre ? (
+                                        <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px' }}>📄 {e.archivoNombre}</span>
+                                      ) : '—'}
+                                    </td>
+                                    <td style={{ ...s.td, whiteSpace: 'nowrap' }}>
+                                      <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '12px' }}>
+                                        {e.creadoEn?.toDate?.()?.toLocaleDateString('es-PE') || '—'}
                                       </span>
-                                    ) : (
-                                      <span style={{ color: '#f59e0b', fontSize: '12px' }}>⏳ Pendiente</span>
-                                    )}
-                                  </td>
-                                  <td style={s.td}>
-                                    <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px' }}>
-                                      {e.nivelGlobal || '—'}
-                                    </span>
-                                  </td>
-                                  <td style={s.td}>
-                                    {e.archivoUrl ? (
-                                      <a href={e.archivoUrl} target="_blank" rel="noreferrer"
-                                        onClick={ev => ev.stopPropagation()}
-                                        style={{ color: '#a78bfa', fontSize: '11px', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '4px', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                        {e.archivoNombre?.toLowerCase().endsWith('.docx') ? '📝' : '📄'} {e.archivoNombre || 'Ver archivo'}
-                                      </a>
-                                    ) : e.archivoNombre ? (
-                                      <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px' }}>📄 {e.archivoNombre}</span>
-                                    ) : '—'}
-                                  </td>
-                                  <td style={{ ...s.td, whiteSpace: 'nowrap' }}>
-                                    <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '12px' }}>
-                                      {e.creadoEn?.toDate?.()?.toLocaleDateString('es-PE') || '—'}
-                                    </span>
-                                  </td>
-                                  <td style={s.td} onClick={ev => ev.stopPropagation()}>
-                                    <button style={s.expulsarBtn} title="Eliminar entrega"
-                                      onClick={() => handleEliminarEntregaDocente(e)}>🗑</button>
-                                  </td>
-                                </tr>
-                              ))}
+                                    </td>
+                                    <td style={s.td} onClick={ev => ev.stopPropagation()}>
+                                      <button style={s.expulsarBtn} onClick={() => handleEliminarEntregaDocente(e)}>🗑</button>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
                             </tbody>
                           </table>
                         </div>
@@ -559,13 +708,12 @@ export default function GestionCursos() {
               </div>
             )}
 
-            <button style={{ ...s.primaryBtn, width: '100%', marginTop: '20px' }}
-              onClick={() => setCursoEntregas(null)}>Cerrar</button>
+            <button style={{ ...s.primaryBtn, width: '100%', marginTop: '16px' }} onClick={() => setCursoEntregas(null)}>Cerrar</button>
           </div>
         </div>
       )}
 
-      {/* ── Modal detalle entrega (docente) ── */}
+      {/* ── Modal detalle entrega ── */}
       {entregaDetalle && (
         <div style={s.overlay}>
           <div style={{ ...s.modal, maxWidth: '800px' }}>
@@ -575,16 +723,39 @@ export default function GestionCursos() {
                 <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '13px', margin: 0 }}>
                   👤 {entregaDetalle.alumnoNombre} · {entregaDetalle.tipoEvaluacion}
                   {entregaDetalle.actividadTitulo && ` · ${entregaDetalle.actividadTitulo}`}
-                  {entregaDetalle.rubricaNombre && ` · 📋 ${entregaDetalle.rubricaNombre}`}
                 </p>
               </div>
               <div style={{ display: 'flex', gap: '8px' }}>
-                <button style={s.expulsarBtn} title="Eliminar entrega" onClick={() => handleEliminarEntregaDocente(entregaDetalle)}>🗑</button>
+                <button style={s.expulsarBtn} onClick={() => handleEliminarEntregaDocente(entregaDetalle)}>🗑</button>
                 <button style={s.closeBtn} onClick={() => setEntregaDetalle(null)}>✕</button>
               </div>
             </div>
 
-            {/* Nota + edición */}
+            {/* Badge IA si existe */}
+            {entregaDetalle.porcentajeIA != null && (
+              <div style={{ marginBottom: '16px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', padding: '14px 16px' }}>
+                <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 8px' }}>🤖 Análisis de contenido generado por IA</p>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+                  <div>
+                    <span style={{ ...iaBadgeStyle(entregaDetalle.porcentajeIA), fontSize: '16px', padding: '4px 12px' }}>
+                      {iaLabel(entregaDetalle.porcentajeIA)} — {entregaDetalle.iaVeredicto || ''}
+                    </span>
+                  </div>
+                  {entregaDetalle.iaObservacion && (
+                    <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '12px', margin: 0, flex: 1 }}>{entregaDetalle.iaObservacion}</p>
+                  )}
+                </div>
+                {entregaDetalle.iaIndicadores?.length > 0 && (
+                  <div style={{ marginTop: '10px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                    {entregaDetalle.iaIndicadores.map((ind, i) => (
+                      <span key={i} style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.5)', padding: '2px 8px', borderRadius: '6px', fontSize: '11px' }}>{ind}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Nota */}
             <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '14px', padding: '20px', marginBottom: '20px' }}>
               {!editandoNota ? (
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
@@ -596,23 +767,13 @@ export default function GestionCursos() {
                         </div>
                         <div style={{ color: nivelColor(entregaDetalle.notaFinal), fontWeight: '600', fontSize: '16px' }}>
                           {entregaDetalle.nivelGlobal}
-                          {entregaDetalle.notaEditadaManualmente && (
-                            <span style={{ color: '#60a5fa', fontSize: '12px', marginLeft: '8px' }}>✏️ Editada</span>
-                          )}
+                          {entregaDetalle.notaEditadaManualmente && <span style={{ color: '#60a5fa', fontSize: '12px', marginLeft: '8px' }}>✏️ Editada</span>}
                         </div>
-                        {entregaDetalle.comentarioDocente && (
-                          <p style={{ color: '#93c5fd', fontSize: '13px', margin: '6px 0 0', fontStyle: 'italic' }}>
-                            "{entregaDetalle.comentarioDocente}"
-                          </p>
-                        )}
+                        {entregaDetalle.comentarioDocente && <p style={{ color: '#93c5fd', fontSize: '13px', margin: '6px 0 0', fontStyle: 'italic' }}>"{entregaDetalle.comentarioDocente}"</p>}
                       </>
-                    ) : (
-                      <span style={{ color: '#f59e0b', fontSize: '16px' }}>⏳ Sin evaluar</span>
-                    )}
+                    ) : <span style={{ color: '#f59e0b', fontSize: '16px' }}>⏳ Sin evaluar</span>}
                   </div>
-                  <button style={s.editarNotaBtn} onClick={abrirEditarNota}>
-                    ✏️ {entregaDetalle.estado === 'evaluado' ? 'Modificar nota' : 'Asignar nota'}
-                  </button>
+                  <button style={s.editarNotaBtn} onClick={abrirEditarNota}>✏️ {entregaDetalle.estado === 'evaluado' ? 'Modificar nota' : 'Asignar nota'}</button>
                 </div>
               ) : (
                 <div>
@@ -621,23 +782,17 @@ export default function GestionCursos() {
                     <div>
                       <label style={s.labelSmall}>Nueva nota (0–20)</label>
                       <input style={{ ...s.input, width: '100px', fontSize: '18px', fontWeight: '700', textAlign: 'center' }}
-                        type="number" min="0" max="20" step="0.5"
-                        value={notaEditada} onChange={e => setNotaEditada(e.target.value)} />
+                        type="number" min="0" max="20" step="0.5" value={notaEditada} onChange={e => setNotaEditada(e.target.value)} />
                     </div>
                     <div style={{ flex: 1 }}>
-                      <label style={s.labelSmall}>Comentario para el alumno (opcional)</label>
-                      <input style={s.input} placeholder="Ej: Revisión manual por ausencia de firma..."
-                        value={comentarioDocente} onChange={e => setComentarioDocente(e.target.value)} />
+                      <label style={s.labelSmall}>Comentario (opcional)</label>
+                      <input style={s.input} placeholder="Ej: Revisión manual..." value={comentarioDocente} onChange={e => setComentarioDocente(e.target.value)} />
                     </div>
                   </div>
-                  {msgNota && (
-                    <p style={{ color: msgNota.includes('✅') ? '#22c55e' : '#ef4444', fontSize: '13px', margin: '0 0 10px' }}>{msgNota}</p>
-                  )}
+                  {msgNota && <p style={{ color: msgNota.includes('✅') ? '#22c55e' : '#ef4444', fontSize: '13px', margin: '0 0 10px' }}>{msgNota}</p>}
                   <div style={{ display: 'flex', gap: '10px' }}>
                     <button style={s.secondaryBtn} onClick={() => { setEditandoNota(false); setMsgNota(''); }}>Cancelar</button>
-                    <button style={s.primaryBtn} onClick={handleGuardarNota} disabled={guardandoNota}>
-                      {guardandoNota ? 'Guardando...' : '💾 Guardar nota'}
-                    </button>
+                    <button style={s.primaryBtn} onClick={handleGuardarNota} disabled={guardandoNota}>{guardandoNota ? 'Guardando...' : '💾 Guardar nota'}</button>
                   </div>
                 </div>
               )}
@@ -646,16 +801,12 @@ export default function GestionCursos() {
             {/* Criterios */}
             {entregaDetalle.criterios?.length > 0 && (
               <div style={{ marginBottom: '20px' }}>
-                <h3 style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 12px' }}>
-                  Detalle por criterios (evaluación IA)
-                </h3>
+                <h3 style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 12px' }}>Detalle por criterios</h3>
                 {entregaDetalle.criterios.map((c, i) => (
                   <div key={i} style={{ marginBottom: '12px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                       <span style={{ color: '#fff', fontSize: '13px', fontWeight: '500' }}>{c.nombre}</span>
-                      <span style={{ color: nivelColor(c.puntajeObtenido / c.puntajeMaximo * 20), fontWeight: '600', fontSize: '13px' }}>
-                        {c.puntajeObtenido}/{c.puntajeMaximo} — {c.nivel}
-                      </span>
+                      <span style={{ color: nivelColor(c.puntajeObtenido / c.puntajeMaximo * 20), fontWeight: '600', fontSize: '13px' }}>{c.puntajeObtenido}/{c.puntajeMaximo} — {c.nivel}</span>
                     </div>
                     <div style={{ height: '5px', background: 'rgba(255,255,255,0.08)', borderRadius: '3px', overflow: 'hidden' }}>
                       <div style={{ height: '100%', width: `${(c.puntajeObtenido / c.puntajeMaximo) * 100}%`, background: nivelColor(c.puntajeObtenido / c.puntajeMaximo * 20), borderRadius: '3px' }} />
@@ -666,17 +817,14 @@ export default function GestionCursos() {
               </div>
             )}
 
-            {/* Retroalimentación */}
             {entregaDetalle.retroalimentacionGeneral && (
               <div style={{ background: 'rgba(102,126,234,0.08)', borderRadius: '10px', padding: '14px', marginBottom: '16px' }}>
                 <p style={{ color: '#a78bfa', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 6px' }}>Retroalimentación IA</p>
-                <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: '13px', lineHeight: '1.6', margin: 0 }}>
-                  {entregaDetalle.retroalimentacionGeneral}
-                </p>
+                <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: '13px', lineHeight: '1.6', margin: 0 }}>{entregaDetalle.retroalimentacionGeneral}</p>
               </div>
             )}
 
-            {/* Visor trabajo */}
+            {/* Visor archivo */}
             <div style={s.trabajoBox}>
               <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 12px' }}>📄 Trabajo entregado</p>
               {entregaDetalle.archivoUrl ? (
@@ -696,13 +844,11 @@ export default function GestionCursos() {
                       src={`https://docs.google.com/gview?url=${encodeURIComponent(entregaDetalle.archivoUrl)}&embedded=true`}
                       style={{ width: '100%', height: '560px', border: 'none', borderRadius: '10px', background: '#fff' }} allowFullScreen />
                   ) : (
-                    <object key={entregaDetalle.id}
-                      data={`${entregaDetalle.archivoUrl}#toolbar=1&navpanes=0`}
-                      type="application/pdf"
+                    <object key={entregaDetalle.id} data={`${entregaDetalle.archivoUrl}#toolbar=1&navpanes=0`} type="application/pdf"
                       style={{ width: '100%', height: '560px', borderRadius: '10px', border: 'none' }}>
                       <div style={{ padding: '32px', textAlign: 'center' }}>
                         <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '14px', marginBottom: '12px' }}>El navegador no puede mostrar el PDF aquí.</p>
-                        <a href={entregaDetalle.archivoUrl} target="_blank" rel="noreferrer" style={{ color: '#a78bfa', fontWeight: '600' }}>📄 Abrir PDF en nueva pestaña →</a>
+                        <a href={entregaDetalle.archivoUrl} target="_blank" rel="noreferrer" style={{ color: '#a78bfa', fontWeight: '600' }}>📄 Abrir PDF →</a>
                       </div>
                     </object>
                   )}
@@ -715,9 +861,7 @@ export default function GestionCursos() {
             </div>
 
             <div style={{ display: 'flex', gap: '12px', marginTop: '20px' }}>
-              <button style={s.secondaryBtn} onClick={() => { setEntregaDetalle(null); setEditandoNota(false); }}>
-                ← Volver a lista
-              </button>
+              <button style={s.secondaryBtn} onClick={() => { setEntregaDetalle(null); setEditandoNota(false); }}>← Volver a lista</button>
             </div>
           </div>
         </div>
@@ -730,26 +874,18 @@ export default function GestionCursos() {
             <div style={s.modalHeader}>
               <div>
                 <h2 style={s.modalTitle}>{cursoPendientes.nombre}</h2>
-                <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '13px', margin: 0 }}>
-                  Sección {cursoPendientes.seccion} · {cursoPendientes.ciclo}
-                </p>
+                <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '13px', margin: 0 }}>Sección {cursoPendientes.seccion} · {cursoPendientes.ciclo}</p>
               </div>
               <button style={s.closeBtn} onClick={() => setCursoPendientes(null)}>✕</button>
             </div>
             <div style={s.seccion}>
-              <h3 style={s.seccionTitle}>
-                ⏳ Solicitudes pendientes
-                {pendientes.length > 0 && <span style={s.badgeRed}>{pendientes.length}</span>}
-              </h3>
+              <h3 style={s.seccionTitle}>⏳ Solicitudes pendientes {pendientes.length > 0 && <span style={s.badgeRed}>{pendientes.length}</span>}</h3>
               {pendientes.length === 0 ? <p style={s.emptyText}>Sin solicitudes pendientes</p>
                 : pendientes.map((m, i) => (
                   <div key={i} style={s.alumnoRow}>
                     <div style={s.alumnoInfo}>
                       <span style={s.alumnoAvatar}>👤</span>
-                      <div>
-                        <p style={s.alumnoNombre}>{m.alumnoNombre}</p>
-                        <p style={s.alumnoEmail}>{m.alumnoEmail}</p>
-                      </div>
+                      <div><p style={s.alumnoNombre}>{m.alumnoNombre}</p><p style={s.alumnoEmail}>{m.alumnoEmail}</p></div>
                     </div>
                     <div style={{ display: 'flex', gap: '8px' }}>
                       <button style={s.aprobarBtn} onClick={() => handleAprobar(m.id)}>✓ Aprobar</button>
@@ -759,21 +895,15 @@ export default function GestionCursos() {
                 ))}
             </div>
             <div style={s.seccion}>
-              <h3 style={s.seccionTitle}>
-                ✅ Alumnos aprobados
-                {aprobados.length > 0 && <span style={s.badgeGreen}>{aprobados.length}</span>}
-              </h3>
+              <h3 style={s.seccionTitle}>✅ Alumnos aprobados {aprobados.length > 0 && <span style={s.badgeGreen}>{aprobados.length}</span>}</h3>
               {aprobados.length === 0 ? <p style={s.emptyText}>Sin alumnos aprobados aún</p>
                 : aprobados.map((m, i) => (
                   <div key={i} style={s.alumnoRowAprobado}>
                     <span style={s.alumnoAvatar}>👤</span>
-                    <div style={{ flex: 1 }}>
-                      <p style={s.alumnoNombre}>{m.alumnoNombre}</p>
-                      <p style={s.alumnoEmail}>{m.alumnoEmail}</p>
-                    </div>
+                    <div style={{ flex: 1 }}><p style={s.alumnoNombre}>{m.alumnoNombre}</p><p style={s.alumnoEmail}>{m.alumnoEmail}</p></div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                       <span style={{ color: '#22c55e', fontSize: '13px' }}>✓ Aprobado</span>
-                      <button style={s.expulsarBtn} onClick={() => handleExpulsarAlumno(m)} title="Expulsar">🗑</button>
+                      <button style={s.expulsarBtn} onClick={() => handleExpulsarAlumno(m)}>🗑</button>
                     </div>
                   </div>
                 ))}
@@ -790,22 +920,14 @@ export default function GestionCursos() {
             <div style={s.modalHeader}>
               <div>
                 <h2 style={s.modalTitle}>📝 Actividades — {cursoActividades.nombre}</h2>
-                <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '13px', margin: 0 }}>
-                  Sección {cursoActividades.seccion} · {cursoActividades.ciclo}
-                </p>
+                <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '13px', margin: 0 }}>Sección {cursoActividades.seccion} · {cursoActividades.ciclo}</p>
               </div>
               <button style={s.closeBtn} onClick={() => { setCursoActividades(null); setShowActForm(false); }}>✕</button>
             </div>
-            {msgAct && (
-              <div style={{ color: msgAct.includes('✅') ? '#22c55e' : '#ef4444', marginBottom: '16px', fontSize: '13px', background: msgAct.includes('✅') ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)', padding: '10px 14px', borderRadius: '8px' }}>
-                {msgAct}
-              </div>
-            )}
+            {msgAct && <div style={{ color: msgAct.includes('✅') ? '#22c55e' : '#ef4444', marginBottom: '16px', fontSize: '13px', background: msgAct.includes('✅') ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)', padding: '10px 14px', borderRadius: '8px' }}>{msgAct}</div>}
             {actividades.length > 0 && (
               <div style={{ marginBottom: '20px' }}>
-                <h3 style={{ color: 'rgba(255,255,255,0.6)', fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 12px' }}>
-                  Actividades publicadas ({actividades.length})
-                </h3>
+                <h3 style={{ color: 'rgba(255,255,255,0.6)', fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 12px' }}>Actividades publicadas ({actividades.length})</h3>
                 {actividades.map((a, i) => {
                   const fl = fechaLimiteDisplay(a.fechaLimite);
                   return (
@@ -817,32 +939,23 @@ export default function GestionCursos() {
                           {a.enunciadoNombre && <span style={s.archivoBadge}>📄 {a.enunciadoNombre}</span>}
                           {a.rubricaId && <span style={s.rubricaBadge}>📋 Rúbrica</span>}
                           {fl && (
-                            <span style={{
-                              background: fl.vencida ? 'rgba(239,68,68,0.15)' : fl.diff <= 2 ? 'rgba(245,158,11,0.15)' : 'rgba(34,197,94,0.1)',
-                              color: fl.vencida ? '#ef4444' : fl.diff <= 2 ? '#f59e0b' : '#22c55e',
-                              padding: '2px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: '600',
-                            }}>
+                            <span style={{ background: fl.vencida ? 'rgba(239,68,68,0.15)' : fl.diff <= 2 ? 'rgba(245,158,11,0.15)' : 'rgba(34,197,94,0.1)', color: fl.vencida ? '#ef4444' : fl.diff <= 2 ? '#f59e0b' : '#22c55e', padding: '2px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: '600' }}>
                               📅 {fl.vencida ? 'Vencida' : `${fl.diff}d restantes`} · {new Date(a.fechaLimite).toLocaleDateString('es-PE')}
                             </span>
                           )}
                         </div>
-                        {a.descripcion && (
-                          <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '12px', margin: 0, lineHeight: '1.4' }}>
-                            {a.descripcion.substring(0, 120)}{a.descripcion.length > 120 ? '…' : ''}
-                          </p>
-                        )}
+                        {a.descripcion && <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '12px', margin: 0, lineHeight: '1.4' }}>{a.descripcion.substring(0, 120)}{a.descripcion.length > 120 ? '…' : ''}</p>}
                       </div>
                       {editingActividadId === a.id ? (
                         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                          <input type="datetime-local" style={{ ...s.input, padding: '6px 8px', height: '36px' }}
-                            value={editFecha} onChange={e => setEditFecha(e.target.value)} />
+                          <input type="datetime-local" style={{ ...s.input, padding: '6px 8px', height: '36px' }} value={editFecha} onChange={e => setEditFecha(e.target.value)} />
                           <button style={s.primaryBtn} disabled={guardandoAct} onClick={handleGuardarFecha}>Guardar</button>
                           <button style={s.secondaryBtn} onClick={handleCancelarEditar}>Cancelar</button>
                         </div>
                       ) : (
                         <div style={{ display: 'flex', gap: '8px' }}>
-                          <button style={s.secondaryBtn} title="Editar fecha" onClick={() => handleEditarActividad(a)}>✏️</button>
-                          <button style={s.expulsarBtn} title="Eliminar actividad" onClick={() => handleEliminarActividad(a)}>🗑</button>
+                          <button style={s.secondaryBtn} onClick={() => handleEditarActividad(a)}>✏️</button>
+                          <button style={s.expulsarBtn} onClick={() => handleEliminarActividad(a)}>🗑</button>
                         </div>
                       )}
                     </div>
@@ -850,41 +963,31 @@ export default function GestionCursos() {
                 })}
               </div>
             )}
-            {actividades.length === 0 && !showActForm && (
-              <div style={{ textAlign: 'center', padding: '32px 0', color: 'rgba(255,255,255,0.3)', fontSize: '14px' }}>
-                No hay actividades publicadas aún
-              </div>
-            )}
+            {actividades.length === 0 && !showActForm && <div style={{ textAlign: 'center', padding: '32px 0', color: 'rgba(255,255,255,0.3)', fontSize: '14px' }}>No hay actividades publicadas aún</div>}
             {showActForm ? (
               <div style={s.actForm}>
                 <h3 style={{ color: '#fff', fontSize: '15px', fontWeight: '600', margin: '0 0 16px' }}>Nueva actividad</h3>
                 <div style={s.grid2}>
                   <div>
                     <label style={s.label}>Título *</label>
-                    <input style={s.input} placeholder="Ej: Práctica Calificada 1"
-                      value={formAct.titulo} onChange={e => setFormAct(f => ({ ...f, titulo: e.target.value }))} />
+                    <input style={s.input} placeholder="Ej: Práctica Calificada 1" value={formAct.titulo} onChange={e => setFormAct(f => ({ ...f, titulo: e.target.value }))} />
                   </div>
                   <div>
                     <label style={s.label}>Tipo de evaluación *</label>
-                    <select style={s.select} value={formAct.tipoEvaluacion}
-                      onChange={e => setFormAct(f => ({ ...f, tipoEvaluacion: e.target.value }))}>
+                    <select style={s.select} value={formAct.tipoEvaluacion} onChange={e => setFormAct(f => ({ ...f, tipoEvaluacion: e.target.value }))}>
                       <option value="">Seleccionar...</option>
-                      {cursoActividades.tiposEvaluacion?.map((t, i) => (
-                        <option key={i} value={t.nombre}>{t.nombre} ({t.peso}%)</option>
-                      ))}
+                      {cursoActividades.tiposEvaluacion?.map((t, i) => <option key={i} value={t.nombre}>{t.nombre} ({t.peso}%)</option>)}
                     </select>
                   </div>
                 </div>
                 <div style={s.grid2}>
                   <div>
                     <label style={s.label}>Descripción breve</label>
-                    <input style={s.input} placeholder="Ej: Resolver los ejercicios de los temas 3 y 4"
-                      value={formAct.descripcion} onChange={e => setFormAct(f => ({ ...f, descripcion: e.target.value }))} />
+                    <input style={s.input} placeholder="Ej: Resolver ejercicios de los temas 3 y 4" value={formAct.descripcion} onChange={e => setFormAct(f => ({ ...f, descripcion: e.target.value }))} />
                   </div>
                   <div>
-                    <label style={s.label}>📅 Fecha límite de entrega</label>
-                    <input style={s.input} type="datetime-local"
-                      value={formAct.fechaLimite} onChange={e => setFormAct(f => ({ ...f, fechaLimite: e.target.value }))} />
+                    <label style={s.label}>📅 Fecha límite</label>
+                    <input style={s.input} type="datetime-local" value={formAct.fechaLimite} onChange={e => setFormAct(f => ({ ...f, fechaLimite: e.target.value }))} />
                     <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px', marginTop: '4px' }}>Los alumnos verán cuánto tiempo les queda</p>
                   </div>
                 </div>
@@ -896,21 +999,17 @@ export default function GestionCursos() {
                       <input type="file" accept=".pdf" style={{ display: 'none' }} onChange={handleEnunciadoPDF} />
                     </label>
                   </div>
-                  <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px', margin: 0 }}>
-                    La IA usará este enunciado para evaluar si el alumno respondió lo que se pidió
-                  </p>
+                  <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px', margin: 0 }}>La IA usará este enunciado para evaluar si el alumno respondió lo que se pidió</p>
                   {!formAct.enunciadoNombre && (
                     <textarea style={{ ...s.textarea, marginTop: '10px', minHeight: '80px' }}
                       placeholder="O escribe el enunciado directamente aquí..."
-                      value={formAct.enunciadoTexto}
-                      onChange={e => setFormAct(f => ({ ...f, enunciadoTexto: e.target.value }))} />
+                      value={formAct.enunciadoTexto} onChange={e => setFormAct(f => ({ ...f, enunciadoTexto: e.target.value }))} />
                   )}
                 </div>
                 {rubricas.length > 0 && (
                   <div style={{ marginBottom: '16px' }}>
                     <label style={s.label}>Rúbrica de evaluación</label>
-                    <select style={s.select} value={formAct.rubricaId}
-                      onChange={e => setFormAct(f => ({ ...f, rubricaId: e.target.value }))}>
+                    <select style={s.select} value={formAct.rubricaId} onChange={e => setFormAct(f => ({ ...f, rubricaId: e.target.value }))}>
                       <option value="">Sin rúbrica específica</option>
                       {rubricas.map(r => <option key={r.id} value={r.id}>{r.nombre}</option>)}
                     </select>
@@ -918,15 +1017,11 @@ export default function GestionCursos() {
                 )}
                 <div style={{ display: 'flex', gap: '10px' }}>
                   <button style={s.secondaryBtn} onClick={() => { setShowActForm(false); setMsgAct(''); }}>Cancelar</button>
-                  <button style={s.primaryBtn} onClick={handleGuardarActividad} disabled={guardandoAct}>
-                    {guardandoAct ? 'Publicando...' : '📢 Publicar actividad'}
-                  </button>
+                  <button style={s.primaryBtn} onClick={handleGuardarActividad} disabled={guardandoAct}>{guardandoAct ? 'Publicando...' : '📢 Publicar actividad'}</button>
                 </div>
               </div>
             ) : (
-              <button style={{ ...s.primaryBtn, width: '100%' }} onClick={() => setShowActForm(true)}>
-                + Nueva actividad
-              </button>
+              <button style={{ ...s.primaryBtn, width: '100%' }} onClick={() => setShowActForm(true)}>+ Nueva actividad</button>
             )}
           </div>
         </div>
@@ -943,32 +1038,27 @@ export default function GestionCursos() {
             <div style={s.grid3}>
               <div style={{ gridColumn: 'span 2' }}>
                 <label style={s.label}>Nombre del curso *</label>
-                <input style={s.input} placeholder="Ej: Contabilidad General"
-                  value={form.nombre} onChange={e => setForm(f => ({ ...f, nombre: e.target.value }))} />
+                <input style={s.input} placeholder="Ej: Contabilidad General" value={form.nombre} onChange={e => setForm(f => ({ ...f, nombre: e.target.value }))} />
               </div>
               <div>
                 <label style={s.label}>Sección *</label>
-                <input style={s.input} placeholder="Ej: A"
-                  value={form.seccion} onChange={e => setForm(f => ({ ...f, seccion: e.target.value.toUpperCase() }))} />
+                <input style={s.input} placeholder="Ej: A" value={form.seccion} onChange={e => setForm(f => ({ ...f, seccion: e.target.value.toUpperCase() }))} />
               </div>
             </div>
             <div style={s.grid2}>
               <div>
                 <label style={s.label}>Código del curso *</label>
-                <input style={s.input} placeholder="Ej: CONT-2024-A"
-                  value={form.codigo} onChange={e => setForm(f => ({ ...f, codigo: e.target.value.toUpperCase() }))} />
+                <input style={s.input} placeholder="Ej: CONT-2024-A" value={form.codigo} onChange={e => setForm(f => ({ ...f, codigo: e.target.value.toUpperCase() }))} />
                 <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px', marginTop: '6px' }}>Comparte este código con tus alumnos</p>
               </div>
               <div>
                 <label style={s.label}>Ciclo / Semestre</label>
-                <input style={s.input} placeholder="Ej: 2024-II"
-                  value={form.ciclo} onChange={e => setForm(f => ({ ...f, ciclo: e.target.value }))} />
+                <input style={s.input} placeholder="Ej: 2024-II" value={form.ciclo} onChange={e => setForm(f => ({ ...f, ciclo: e.target.value }))} />
               </div>
             </div>
             <div style={{ marginBottom: '16px' }}>
               <label style={s.label}>Descripción</label>
-              <input style={s.input} placeholder="Descripción breve"
-                value={form.descripcion} onChange={e => setForm(f => ({ ...f, descripcion: e.target.value }))} />
+              <input style={s.input} placeholder="Descripción breve" value={form.descripcion} onChange={e => setForm(f => ({ ...f, descripcion: e.target.value }))} />
             </div>
             <div style={s.silaboBox}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
@@ -983,30 +1073,21 @@ export default function GestionCursos() {
             <div style={{ marginBottom: '20px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                 <label style={s.label}>Tipos de Evaluación y Pesos</label>
-                <span style={{ color: totalPeso === 100 ? '#22c55e' : '#ef4444', fontSize: '13px', fontWeight: '600' }}>
-                  Total: {totalPeso}% {totalPeso === 100 ? '✓' : '← debe ser 100%'}
-                </span>
+                <span style={{ color: totalPeso === 100 ? '#22c55e' : '#ef4444', fontSize: '13px', fontWeight: '600' }}>Total: {totalPeso}% {totalPeso === 100 ? '✓' : '← debe ser 100%'}</span>
               </div>
               {form.tiposEvaluacion.map((t, i) => (
                 <div key={i} style={s.tipoRow}>
-                  <input style={{ ...s.input, flex: 2 }} placeholder="Nombre (ej: Tareas)"
-                    value={t.nombre} onChange={e => updateTipo(i, 'nombre', e.target.value)} />
-                  <input style={{ ...s.input, width: '70px', textAlign: 'center' }}
-                    type="number" min="0" max="100" value={t.peso}
-                    onChange={e => updateTipo(i, 'peso', e.target.value)} />
+                  <input style={{ ...s.input, flex: 2 }} placeholder="Nombre (ej: Tareas)" value={t.nombre} onChange={e => updateTipo(i, 'nombre', e.target.value)} />
+                  <input style={{ ...s.input, width: '70px', textAlign: 'center' }} type="number" min="0" max="100" value={t.peso} onChange={e => updateTipo(i, 'peso', e.target.value)} />
                   <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '13px' }}>%</span>
-                  <button onClick={() => setForm(f => ({ ...f, tiposEvaluacion: f.tiposEvaluacion.filter((_, idx) => idx !== i) }))}
-                    style={s.removeBtn}>✕</button>
+                  <button onClick={() => setForm(f => ({ ...f, tiposEvaluacion: f.tiposEvaluacion.filter((_, idx) => idx !== i) }))} style={s.removeBtn}>✕</button>
                 </div>
               ))}
-              <button onClick={() => setForm(f => ({ ...f, tiposEvaluacion: [...f.tiposEvaluacion, { nombre: '', peso: 0 }] }))}
-                style={s.addTipoBtn}>+ Agregar tipo</button>
+              <button onClick={() => setForm(f => ({ ...f, tiposEvaluacion: [...f.tiposEvaluacion, { nombre: '', peso: 0 }] }))} style={s.addTipoBtn}>+ Agregar tipo</button>
             </div>
             <div style={{ display: 'flex', gap: '12px' }}>
               <button style={s.secondaryBtn} onClick={() => setShowForm(false)}>Cancelar</button>
-              <button style={s.primaryBtn} onClick={handleGuardar} disabled={guardando}>
-                {guardando ? 'Creando...' : '🚀 Crear Curso'}
-              </button>
+              <button style={s.primaryBtn} onClick={handleGuardar} disabled={guardando}>{guardando ? 'Creando...' : '🚀 Crear Curso'}</button>
             </div>
           </div>
         </div>
@@ -1024,6 +1105,9 @@ const s = {
   secondaryBtn: { padding: '12px 24px', borderRadius: '12px', background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.7)', border: '1px solid rgba(255,255,255,0.12)', cursor: 'pointer', fontSize: '14px' },
   dangerBtn: { padding: '12px 24px', borderRadius: '12px', background: 'rgba(239,68,68,0.2)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.4)', cursor: 'pointer', fontWeight: '600', fontSize: '14px' },
   editarNotaBtn: { padding: '10px 20px', borderRadius: '10px', background: 'rgba(167,139,250,0.15)', border: '1px solid rgba(167,139,250,0.35)', color: '#a78bfa', cursor: 'pointer', fontWeight: '600', fontSize: '14px' },
+  tabBtn: { padding: '8px 16px', borderRadius: '10px', background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.6)', border: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer', fontSize: '13px', fontWeight: '500' },
+  tabBtnActive: { background: 'linear-gradient(135deg,#667eea,#764ba2)', color: '#fff', border: 'none', fontWeight: '700' },
+  subTitle: { color: 'rgba(255,255,255,0.5)', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 12px', marginTop: '20px' },
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '16px' },
   cursoCard: { background: 'rgba(255,255,255,0.04)', borderRadius: '16px', padding: '24px', border: '1px solid rgba(255,255,255,0.08)', display: 'flex', flexDirection: 'column', gap: '10px' },
   cursoTop: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
@@ -1043,7 +1127,7 @@ const s = {
   solicitudesBtn: { width: '100%', padding: '10px', borderRadius: '10px', background: 'rgba(102,126,234,0.08)', border: '1px solid rgba(102,126,234,0.15)', color: 'rgba(167,139,250,0.7)', cursor: 'pointer', fontSize: '13px', fontWeight: '500' },
   overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 1000, overflowY: 'auto', padding: '32px' },
   modal: { background: '#1a1535', borderRadius: '20px', padding: '32px', width: '100%', maxWidth: '680px', border: '1px solid rgba(255,255,255,0.1)' },
-  modalHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px', position: 'sticky', top: 0, zIndex: 2, background: '#1a1535', paddingTop: 0, paddingBottom: 0 },
+  modalHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px' },
   modalTitle: { color: '#fff', fontSize: '20px', fontWeight: '700', margin: '0 0 4px' },
   closeBtn: { background: 'rgba(255,255,255,0.08)', border: 'none', color: 'rgba(255,255,255,0.6)', cursor: 'pointer', fontSize: '16px', width: '32px', height: '32px', borderRadius: '8px' },
   seccion: { marginBottom: '24px' },
@@ -1070,7 +1154,7 @@ const s = {
   table: { width: '100%', borderCollapse: 'collapse' },
   th: { color: 'rgba(255,255,255,0.35)', fontSize: '10px', fontWeight: '600', textAlign: 'left', padding: '6px 10px', textTransform: 'uppercase', letterSpacing: '0.06em', borderBottom: '1px solid rgba(255,255,255,0.06)' },
   tr: { borderBottom: '1px solid rgba(255,255,255,0.04)' },
-  td: { color: 'rgba(255,255,255,0.8)', fontSize: '13px', padding: '10px 10px' },
+  td: { color: 'rgba(255,255,255,0.8)', fontSize: '13px', padding: '9px 10px' },
   badge: { padding: '3px 10px', borderRadius: '8px', fontSize: '12px', fontWeight: '700' },
   trabajoBox: { background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', padding: '16px' },
   textoTrabajo: { color: 'rgba(255,255,255,0.7)', fontSize: '13px', lineHeight: '1.7', whiteSpace: 'pre-wrap', maxHeight: '400px', overflowY: 'auto', padding: '4px' },
@@ -1085,7 +1169,6 @@ const s = {
   tipoRow: { display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '10px' },
   removeBtn: { background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.2)', color: '#ef4444', borderRadius: '8px', cursor: 'pointer', padding: '8px 10px', fontSize: '13px' },
   addTipoBtn: { width: '100%', padding: '10px', borderRadius: '10px', border: '2px dashed rgba(102,126,234,0.3)', background: 'transparent', color: '#a78bfa', cursor: 'pointer', fontSize: '13px' },
-  // ── Nuevos: grupos de entregas ──
   grupoCard: { background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(102,126,234,0.15)', borderRadius: '14px', overflow: 'hidden' },
-  grupoHeader: { width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px', background: 'rgba(102,126,234,0.08)', border: 'none', cursor: 'pointer', gap: '12px', textAlign: 'left' },
+  grupoHeader: { width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 16px', background: 'rgba(102,126,234,0.08)', border: 'none', cursor: 'pointer', gap: '12px', textAlign: 'left' },
 };
