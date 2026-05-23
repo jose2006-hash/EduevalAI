@@ -566,7 +566,7 @@ export default function GestionCursos() {
       {/* ── Modal entregas agrupadas ── */}
       {cursoEntregas && !entregaDetalle && !showReporte && (
         <div style={s.overlay}>
-          <div style={{ ...s.modal, maxWidth: '940px', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ ...s.modal, maxWidth: '940px', maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             <div style={s.modalHeader}>
               <div>
                 <h2 style={s.modalTitle}>📋 Entregas — {cursoEntregas.nombre}</h2>
@@ -614,7 +614,8 @@ export default function GestionCursos() {
                 display: 'flex', flexDirection: 'column', gap: '10px',
                 flex: 1,
                 minHeight: 0,
-                overflowY: 'scroll',
+                height: '100%',
+                overflowY: 'auto',
                 paddingRight: '8px',
                 scrollbarWidth: 'thin',
                 scrollbarColor: 'rgba(167,139,250,0.5) rgba(255,255,255,0.06)',
