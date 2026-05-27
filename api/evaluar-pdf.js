@@ -28,8 +28,8 @@ export default async function handler(req, res) {
         'X-Title': 'EduEval AI',
       },
       body: JSON.stringify({
-        // Llama 4 Scout: gratis, soporta visión, excelente calidad
-        model: 'meta-llama/llama-4-scout:free',
+        // Qwen 2.5 VL: gratis, excelente con documentos y escritura a mano
+        model: 'qwen/qwen2.5-vl-72b-instruct:free',
         messages: [
           {
             role: 'user',
