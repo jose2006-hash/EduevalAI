@@ -1,28 +1,48 @@
 // src/openai/evaluador.js
+//
+// ⚠️  CAMBIO CLAVE: Ya NO llamamos a DeepSeek directamente desde el navegador.
+//     Todas las peticiones van a /api/deepseek y /api/deepseek-upload,
+//     que son Vercel Serverless Functions que hacen la llamada desde el servidor.
+//
+// En Vercel, agrega la variable de entorno:
+//   DEEPSEEK_API_KEY = ds-tu-clave-aqui   (sin prefijo VITE_)
 
-const DEEPSEEK_API_KEY = import.meta.env.VITE_DEEPSEEK_API_KEY;
-const DEEPSEEK_API_BASE = import.meta.env.VITE_DEEPSEEK_API_URL || 'https://api.deepseek.ai/v1';
-const DEEPSEEK_MODEL = import.meta.env.VITE_DEEPSEEK_MODEL || 'gpt-4o-mini';
+// Solo el modelo no es sensible; puede venir de env o usar el valor por defecto.
+const DEEPSEEK_MODEL = import.meta.env.VITE_DEEPSEEK_MODEL || 'deepseek-chat';
 
-const deepseekFetch = async (path, body, opts = {}) => {
-  const url = path.startsWith('http') ? path : `${DEEPSEEK_API_BASE}${path}`;
-  const response = await fetch(url, {
+// ─── Helpers de fetch (apuntan a nuestros proxies en /api) ───────────────────
+
+const deepseekJSON = async (path, body, method = 'POST') => {
+  const response = await fetch('/api/deepseek', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
-      ...(opts.headers || {}),
-    },
-    body: JSON.stringify(body),
-    ...opts,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, body, method }),
   });
-
+  if (response.status === 204) return null;
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`Deepseek API error (${response.status}): ${errorText}`);
+    throw new Error(`DeepSeek API error (${response.status}): ${errorText}`);
   }
-
   return response.json();
+};
+
+const deepseekUpload = async (file) => {
+  const base64 = await fileToBase64(file);
+  const response = await fetch('/api/deepseek-upload', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fileName: file.name, fileBase64: base64 }),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Upload error (${response.status}): ${errorText}`);
+  }
+  return response.json();
+};
+
+const deepseekDelete = (fileId) => {
+  // Fire-and-forget; los errores de limpieza no deben romper el flujo principal
+  deepseekJSON(`/files/${fileId}`, undefined, 'DELETE').catch(() => {});
 };
 
 // Convierte un File a base64 (sin el prefijo data:...)
@@ -33,6 +53,8 @@ const fileToBase64 = (file) =>
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
+
+// ─── Evaluación principal ────────────────────────────────────────────────────
 
 export const evaluarTrabajo = async (
   input,
@@ -103,51 +125,41 @@ Responde ÚNICAMENTE en JSON con esta estructura exacta (sin markdown, sin bloqu
       input.name?.toLowerCase().endsWith('.docx');
 
     if (isPdf || isDocx) {
-      const formData = new FormData();
-      formData.append('file', input, input.name);
-      formData.append('purpose', 'assistants');
-
-      const uploadRes = await fetch(`${DEEPSEEK_API_BASE}/files`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${DEEPSEEK_API_KEY}` },
-        body: formData,
-      });
-      const uploadData = await uploadRes.json();
+      // Subir archivo a DeepSeek vía proxy
+      const uploadData = await deepseekUpload(input);
       if (!uploadData.id) throw new Error('No se pudo subir el archivo: ' + JSON.stringify(uploadData));
       const fileId = uploadData.id;
 
       let resultData;
       try {
-        const response = await fetch(`${DEEPSEEK_API_BASE}/chat/completions`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${DEEPSEEK_API_KEY}` },
-          body: JSON.stringify({
-            model: DEEPSEEK_MODEL,
-            messages: [
-              { role: 'system', content: 'Eres un evaluador académico justo y detallado. Siempre respondes en JSON válido sin markdown ni bloques de código.' },
-              {
-                role: 'user',
-                content: [
-                  { type: 'text', text: promptBase + `\n\nEl trabajo del alumno está en el archivo adjunto (${isPdf ? 'PDF' : 'Word'}). Léelo y evalúalo.` },
-                  { type: 'file', file: { file_id: fileId } },
-                ],
-              },
-            ],
-            temperature: 0.3,
-            response_format: { type: 'json_object' },
-            max_tokens: 1400,
-          }),
+        resultData = await deepseekJSON('/chat/completions', {
+          model: DEEPSEEK_MODEL,
+          messages: [
+            {
+              role: 'system',
+              content: 'Eres un evaluador académico justo y detallado. Siempre respondes en JSON válido sin markdown ni bloques de código.',
+            },
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'text',
+                  text: promptBase + `\n\nEl trabajo del alumno está en el archivo adjunto (${isPdf ? 'PDF' : 'Word'}). Léelo y evalúalo.`,
+                },
+                { type: 'file', file: { file_id: fileId } },
+              ],
+            },
+          ],
+          temperature: 0.3,
+          response_format: { type: 'json_object' },
+          max_tokens: 1400,
         });
-        resultData = await response.json();
       } finally {
-        fetch(`${DEEPSEEK_API_BASE}/files/${fileId}`, {
-          method: 'DELETE',
-          headers: { Authorization: `Bearer ${DEEPSEEK_API_KEY}` },
-        }).catch(() => {});
+        deepseekDelete(fileId);
       }
 
-      const content = resultData.choices?.[0]?.message?.content;
-      if (!content) throw new Error(resultData.error?.message || 'Sin respuesta de Deepseek');
+      const content = resultData?.choices?.[0]?.message?.content;
+      if (!content) throw new Error(resultData?.error?.message || 'Sin respuesta de Deepseek');
       return JSON.parse(content.replace(/```json|```/g, '').trim());
     } else {
       throw new Error(`Tipo de archivo no soportado: ${input.type || input.name}`);
@@ -155,39 +167,27 @@ Responde ÚNICAMENTE en JSON con esta estructura exacta (sin markdown, sin bloqu
   }
 
   // Texto plano
-  const response = await fetch(`${DEEPSEEK_API_BASE}/chat/completions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${DEEPSEEK_API_KEY}` },
-    body: JSON.stringify({
-      model: DEEPSEEK_MODEL,
-      messages: [
-        { role: 'system', content: 'Eres un evaluador académico justo y detallado. Siempre respondes en JSON válido sin markdown ni bloques de código.' },
-        { role: 'user', content: promptBase + `\n\n=== TRABAJO DEL ALUMNO ===\n${input}` },
-      ],
-      temperature: 0.3,
-      response_format: { type: 'json_object' },
-      max_tokens: 1400,
-    }),
+  const data = await deepseekJSON('/chat/completions', {
+    model: DEEPSEEK_MODEL,
+    messages: [
+      {
+        role: 'system',
+        content: 'Eres un evaluador académico justo y detallado. Siempre respondes en JSON válido sin markdown ni bloques de código.',
+      },
+      { role: 'user', content: promptBase + `\n\n=== TRABAJO DEL ALUMNO ===\n${input}` },
+    ],
+    temperature: 0.3,
+    response_format: { type: 'json_object' },
+    max_tokens: 1400,
   });
 
-  const data = await response.json();
-  const content = data.choices?.[0]?.message?.content;
-  if (!content) throw new Error(data.error?.message || 'Sin respuesta de Deepseek');
+  const content = data?.choices?.[0]?.message?.content;
+  if (!content) throw new Error(data?.error?.message || 'Sin respuesta de Deepseek');
   return JSON.parse(content.replace(/```json|```/g, '').trim());
 };
 
 // ─── DETECTOR DE IA ──────────────────────────────────────────────────────────
-//
-// Analiza el texto o archivo del alumno y estima el porcentaje de contenido
-// generado por IA. Retorna:
-//   { porcentajeIA, nivel, indicadores, veredicto, observacion }
-//
-// porcentajeIA: 0-100
-// nivel: 'Bajo' | 'Moderado' | 'Alto' | 'Muy alto'
-// indicadores: string[] — señales específicas detectadas
-// veredicto: string — frase corta
-// observacion: string — párrafo explicativo para el alumno
-//
+
 export const detectarIA = async (input) => {
   const prompt = `Eres un experto en detección de contenido generado por inteligencia artificial en trabajos académicos universitarios.
 
@@ -219,87 +219,77 @@ Criterios de nivel:
 - Muy alto: 81-100% (casi todo generado por IA)`;
 
   try {
-    // Si es archivo, subirlo primero
     if (input instanceof File) {
       const isPdf  = input.name?.toLowerCase().endsWith('.pdf');
       const isDocx = input.name?.toLowerCase().endsWith('.docx');
 
       if (isPdf || isDocx) {
-        const formData = new FormData();
-        formData.append('file', input, input.name);
-        formData.append('purpose', 'assistants');
-
-        const uploadRes = await fetch(`$\{DEEPSEEK_API_BASE\}/files`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${DEEPSEEK_API_KEY}` },
-          body: formData,
-        });
-        const uploadData = await uploadRes.json();
+        const uploadData = await deepseekUpload(input);
         if (!uploadData.id) throw new Error('No se pudo subir el archivo para análisis de IA');
         const fileId = uploadData.id;
 
         let resultData;
         try {
-          const response = await fetch(`$\{DEEPSEEK_API_BASE\}/chat/completions`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${DEEPSEEK_API_KEY}` },
-            body: JSON.stringify({
-              model: DEEPSEEK_MODEL,
-              messages: [
-                { role: 'system', content: 'Eres un detector de contenido generado por IA en trabajos académicos. Respondes en JSON válido.' },
-                {
-                  role: 'user',
-                  content: [
-                    { type: 'text', text: prompt + '\n\nEl texto a analizar está en el archivo adjunto.' },
-                    { type: 'file', file: { file_id: fileId } },
-                  ],
-                },
-              ],
-              temperature: 0.2,
-              response_format: { type: 'json_object' },
-              max_tokens: 700,
-            }),
+          resultData = await deepseekJSON('/chat/completions', {
+            model: DEEPSEEK_MODEL,
+            messages: [
+              {
+                role: 'system',
+                content: 'Eres un detector de contenido generado por IA en trabajos académicos. Respondes en JSON válido.',
+              },
+              {
+                role: 'user',
+                content: [
+                  { type: 'text', text: prompt + '\n\nEl texto a analizar está en el archivo adjunto.' },
+                  { type: 'file', file: { file_id: fileId } },
+                ],
+              },
+            ],
+            temperature: 0.2,
+            response_format: { type: 'json_object' },
+            max_tokens: 700,
           });
-          resultData = await response.json();
         } finally {
-          fetch(`${DEEPSEEK_API_BASE}/files/${fileId}`, {
-            method: 'DELETE',
-            headers: { Authorization: `Bearer ${DEEPSEEK_API_KEY}` },
-          }).catch(() => {});
+          deepseekDelete(fileId);
         }
 
-        const content = resultData.choices?.[0]?.message?.content;
+        const content = resultData?.choices?.[0]?.message?.content;
         if (!content) throw new Error('Sin respuesta del detector de IA');
         return JSON.parse(content.replace(/```json|```/g, '').trim());
       }
     }
 
-    // Texto plano
     const textoAnalizar = typeof input === 'string' ? input : '';
     if (!textoAnalizar.trim()) {
-      return { porcentajeIA: 0, nivel: 'Bajo', indicadores: [], veredicto: 'Sin texto para analizar', observacion: 'No se pudo analizar el contenido.' };
+      return {
+        porcentajeIA: 0,
+        nivel: 'Bajo',
+        indicadores: [],
+        veredicto: 'Sin texto para analizar',
+        observacion: 'No se pudo analizar el contenido.',
+      };
     }
 
-    const response = await fetch(`$\{DEEPSEEK_API_BASE\}/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${DEEPSEEK_API_KEY}` },
-      body: JSON.stringify({
-        model: DEEPSEEK_MODEL,
-        messages: [
-          { role: 'system', content: 'Eres un detector de contenido generado por IA en trabajos académicos. Respondes en JSON válido.' },
-          { role: 'user', content: prompt + `\n\n=== TEXTO A ANALIZAR ===\n${textoAnalizar.substring(0, 6000)}` },
-        ],
-        temperature: 0.2,
-        response_format: { type: 'json_object' },
-        max_tokens: 700,
-      }),
+    const data = await deepseekJSON('/chat/completions', {
+      model: DEEPSEEK_MODEL,
+      messages: [
+        {
+          role: 'system',
+          content: 'Eres un detector de contenido generado por IA en trabajos académicos. Respondes en JSON válido.',
+        },
+        {
+          role: 'user',
+          content: prompt + `\n\n=== TEXTO A ANALIZAR ===\n${textoAnalizar.substring(0, 6000)}`,
+        },
+      ],
+      temperature: 0.2,
+      response_format: { type: 'json_object' },
+      max_tokens: 700,
     });
 
-    const data = await response.json();
-    const content = data.choices?.[0]?.message?.content;
+    const content = data?.choices?.[0]?.message?.content;
     if (!content) throw new Error('Sin respuesta del detector de IA');
     return JSON.parse(content.replace(/```json|```/g, '').trim());
-
   } catch (err) {
     console.error('Error en detectarIA:', err);
     return {
@@ -313,27 +303,19 @@ Criterios de nivel:
 };
 
 // ─── REPORTE ESTADÍSTICO POR CURSO ───────────────────────────────────────────
-//
-// Recibe todas las entregas evaluadas de un curso y genera:
-//   - Análisis por alumno (fortalezas, debilidades, recomendación personalizada)
-//   - Análisis estadístico global (temas con menor rendimiento, distribución)
-//   - Recomendaciones pedagógicas para el docente (qué temas reforzar en clase)
-//
+
 export const generarReporteEstadistico = async (entregas, cursoNombre, docenteNombre = '') => {
   if (!entregas || entregas.length === 0) throw new Error('No hay entregas para analizar');
 
-  // Preparar resumen compacto para no exceder tokens
   const evaluadas = entregas.filter(e => e.estado === 'evaluado');
   if (evaluadas.length === 0) throw new Error('No hay entregas evaluadas aún');
 
-  // Agrupar por alumno
   const porAlumno = {};
   evaluadas.forEach(e => {
     if (!porAlumno[e.alumnoNombre]) porAlumno[e.alumnoNombre] = [];
     porAlumno[e.alumnoNombre].push(e);
   });
 
-  // Agrupar por tema
   const porTema = {};
   evaluadas.forEach(e => {
     const tema = e.actividadTitulo || e.titulo || 'Sin tema';
@@ -341,7 +323,6 @@ export const generarReporteEstadistico = async (entregas, cursoNombre, docenteNo
     porTema[tema].push(e);
   });
 
-  // Resumen compacto para la IA
   const resumenAlumnos = Object.entries(porAlumno).map(([nombre, ents]) => {
     const prom = (ents.reduce((s, e) => s + (e.notaFinal || 0), 0) / ents.length).toFixed(1);
     const areas = [...new Set(ents.flatMap(e => e.areasDesMejora || []))].slice(0, 3);
@@ -383,18 +364,11 @@ ${JSON.stringify(resumenAlumnos, null, 2)}
 Genera un reporte pedagógico completo. Responde ÚNICAMENTE en JSON (sin markdown):
 {
   "resumenEjecutivo": "párrafo de 3-4 oraciones con diagnóstico general del grupo",
-
   "estadisticas": {
     "promedioGeneral": número,
     "tasaAprobacion": número (0-100),
-    "distribucion": {
-      "Excelente": número,
-      "Bueno": número,
-      "Regular": número,
-      "Insuficiente": número
-    }
+    "distribucion": { "Excelente": número, "Bueno": número, "Regular": número, "Insuficiente": número }
   },
-
   "temasCriticos": [
     {
       "tema": "nombre del tema",
@@ -404,15 +378,7 @@ Genera un reporte pedagógico completo. Responde ÚNICAMENTE en JSON (sin markdo
       "estrategiasDocente": ["estrategia 1 para reforzar en clase", "estrategia 2"]
     }
   ],
-
-  "temasDestacados": [
-    {
-      "tema": "nombre",
-      "promedio": número,
-      "observacion": "qué salió bien"
-    }
-  ],
-
+  "temasDestacados": [{ "tema": "nombre", "promedio": número, "observacion": "qué salió bien" }],
   "reporteAlumnos": [
     {
       "alumno": "nombre",
@@ -423,15 +389,9 @@ Genera un reporte pedagógico completo. Responde ÚNICAMENTE en JSON (sin markdo
       "recomendacionPersonalizada": "consejo específico de 1-2 oraciones"
     }
   ],
-
   "recomendacionesDocente": [
-    {
-      "prioridad": "Alta|Media|Baja",
-      "accion": "acción concreta que debe tomar el docente",
-      "justificacion": "por qué es importante"
-    }
+    { "prioridad": "Alta|Media|Baja", "accion": "acción concreta", "justificacion": "por qué es importante" }
   ],
-
   "planRefuerzo": {
     "temasReforzar": ["tema 1", "tema 2"],
     "metodologiasSugeridas": ["metodología 1", "metodología 2"],
@@ -439,46 +399,41 @@ Genera un reporte pedagógico completo. Responde ÚNICAMENTE en JSON (sin markdo
   }
 }`;
 
-  const response = await fetch(`${DEEPSEEK_API_BASE}/chat/completions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${DEEPSEEK_API_KEY}` },
-    body: JSON.stringify({
-      model: DEEPSEEK_MODEL,
-      messages: [
-        { role: 'system', content: 'Eres un experto en análisis pedagógico universitario. Respondes en JSON válido sin markdown.' },
-        { role: 'user', content: prompt },
-      ],
-      temperature: 0.4,
-      response_format: { type: 'json_object' },
-      max_tokens: 2500,
-    }),
+  const data = await deepseekJSON('/chat/completions', {
+    model: DEEPSEEK_MODEL,
+    messages: [
+      {
+        role: 'system',
+        content: 'Eres un experto en análisis pedagógico universitario. Respondes en JSON válido sin markdown.',
+      },
+      { role: 'user', content: prompt },
+    ],
+    temperature: 0.4,
+    response_format: { type: 'json_object' },
+    max_tokens: 2500,
   });
 
-  const data = await response.json();
-  const content = data.choices?.[0]?.message?.content;
-  if (!content) throw new Error(data.error?.message || 'Sin respuesta de Deepseek');
+  const content = data?.choices?.[0]?.message?.content;
+  if (!content) throw new Error(data?.error?.message || 'Sin respuesta de Deepseek');
   return JSON.parse(content.replace(/```json|```/g, '').trim());
 };
 
+// ─── REPORTE DE CLASE (simple) ────────────────────────────────────────────────
+
 export const generarReporteClase = async (evaluaciones, cursoNombre) => {
   const resumen = evaluaciones
-    .map((e) => `- ${e.alumnoNombre}: ${e.notaFinal}/20 (${e.nivelGlobal})`)
+    .map(e => `- ${e.alumnoNombre}: ${e.notaFinal}/20 (${e.nivelGlobal})`)
     .join('\n');
 
   const prompt = `Analiza los resultados del curso "${cursoNombre}":\n${resumen}\n\nResponde en JSON:\n{\n  "promedioClase": número,\n  "distribucion": { "Excelente": número, "Bueno": número, "Regular": número, "Insuficiente": número },\n  "analisisGeneral": "análisis de 2-3 oraciones",\n  "recomendacionesDocente": ["rec1", "rec2", "rec3"]\n}`;
 
-  const response = await fetch(`${DEEPSEEK_API_BASE}/chat/completions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${DEEPSEEK_API_KEY}` },
-    body: JSON.stringify({
-      model: DEEPSEEK_MODEL,
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.3,
-      response_format: { type: 'json_object' },
-      max_tokens: 700,
-    }),
+  const data = await deepseekJSON('/chat/completions', {
+    model: DEEPSEEK_MODEL,
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.3,
+    response_format: { type: 'json_object' },
+    max_tokens: 700,
   });
 
-  const data = await response.json();
   return JSON.parse(data.choices[0].message.content);
 };
