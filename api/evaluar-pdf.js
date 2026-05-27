@@ -28,8 +28,7 @@ export default async function handler(req, res) {
         'X-Title': 'EduEval AI',
       },
       body: JSON.stringify({
-        // Gemini 2.0 Flash: ~$0.10 por 1000 páginas, excelente con visión
-        model: 'google/gemini-2.0-flash',
+        model: 'google/gemma-4-27b-it:free',
         messages: [
           {
             role: 'user',
