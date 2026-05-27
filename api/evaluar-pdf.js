@@ -28,7 +28,7 @@ export default async function handler(req, res) {
         'X-Title': 'EduEval AI',
       },
       body: JSON.stringify({
-        model: 'google/gemma-4-27b-it:free',
+        model: 'meta-llama/llama-4-maverick',
         messages: [
           {
             role: 'user',
