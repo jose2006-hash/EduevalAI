@@ -28,8 +28,8 @@ export default async function handler(req, res) {
         'X-Title': 'EduEval AI',
       },
       body: JSON.stringify({
-        // Qwen 2.5 VL: gratis, excelente con documentos y escritura a mano
-        model: 'qwen/qwen2.5-vl-72b-instruct:free',
+        // Gemini 2.0 Flash: ~$0.10 por 1000 páginas, excelente con visión
+        model: 'google/gemini-2.0-flash',
         messages: [
           {
             role: 'user',
