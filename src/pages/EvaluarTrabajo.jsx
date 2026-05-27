@@ -185,7 +185,7 @@ export default function EvaluarTrabajo() {
             {evaluando && (
               <div style={styles.evaluandoMsg}>
                 <div style={styles.spinner} />
-                Analizando el trabajo con GPT-4o...
+                Analizando el trabajo con Deepseek...
               </div>
             )}
             {error && <p style={styles.error}>{error}</p>}

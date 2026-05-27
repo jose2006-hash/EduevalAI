@@ -1,6 +1,6 @@
 # 🎓 AcademIA — Plataforma de Evaluación Académica con IA
 
-Sistema de evaluación automática de trabajos académicos usando **Firebase** + **OpenAI GPT-4o**.
+Sistema de evaluación automática de trabajos académicos usando **Firebase** + **Deepseek**.
 
 ---
 
@@ -8,7 +8,7 @@ Sistema de evaluación automática de trabajos académicos usando **Firebase** +
 
 | Funcionalidad | Descripción |
 |---|---|
-| 🤖 Evaluación con IA | GPT-4o evalúa trabajos según la rúbrica del docente |
+| 🤖 Evaluación con IA | Deepseek evalúa trabajos según la rúbrica del docente |
 | 📋 Gestión de Rúbricas | Crea criterios personalizados con niveles y pesos |
 | 📊 Dashboard Docente | Gráficas, estadísticas, historial de evaluaciones |
 | 👤 Portal del Alumno | Cada alumno ve sus notas y retroalimentación |
@@ -26,7 +26,7 @@ academia-ai/
 │   │   ├── config.js          # Inicialización Firebase
 │   │   └── services.js        # CRUD: usuarios, cursos, rúbricas, evaluaciones
 │   ├── openai/
-│   │   └── evaluador.js       # Lógica de evaluación con GPT-4o
+│   │   └── evaluador.js       # Lógica de evaluación con Deepseek
 │   ├── components/
 │   │   └── AuthContext.jsx    # Contexto de autenticación React
 │   ├── pages/
@@ -70,7 +70,9 @@ cp .env.example .env
 
 # Edita .env con tus credenciales reales:
 # VITE_FIREBASE_API_KEY=...
-# VITE_OPENAI_API_KEY=sk-...
+# VITE_DEEPSEEK_API_KEY=ds-...
+# VITE_DEEPSEEK_API_URL=https://api.deepseek.ai/v1
+# VITE_DEEPSEEK_MODEL=gpt-4o-mini
 ```
 
 ### 4. Configurar reglas de Firestore
@@ -151,8 +153,8 @@ evaluaciones/      → alumnoUid, alumnoNombre, cursoId, rubricaId, tema,
 
 1. Docente selecciona alumno, curso, rúbrica y tema
 2. Pega el texto del trabajo del alumno
-3. El sistema envía a GPT-4o: **trabajo + rúbrica completa**
-4. GPT-4o devuelve JSON estructurado con:
+3. El sistema envía a Deepseek: **trabajo + rúbrica completa**
+4. Deepseek devuelve JSON estructurado con:
    - Nota por criterio (con nivel y comentario)
    - Nota final sobre 20
    - Fortalezas del trabajo
@@ -191,4 +193,4 @@ firebase deploy
 
 ---
 
-Desarrollado con ❤️ | Firebase + OpenAI GPT-4o + React + Vite
+Desarrollado con ❤️ | Firebase + Deepseek + React + Vite

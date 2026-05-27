@@ -13,7 +13,6 @@
     "firebase": "^10.7.0",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.8",
-    "openai": "^4.28.0",
     "pdfjs-dist": "^5.7.284",
     "react": "^18.2.0",
     "react-chartjs-2": "^5.2.0",

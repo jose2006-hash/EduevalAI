@@ -1,6 +1,29 @@
 // src/openai/evaluador.js
 
-const OPENAI_API_KEY = import.meta.env.VITE_OPENAI_API_KEY;
+const DEEPSEEK_API_KEY = import.meta.env.VITE_DEEPSEEK_API_KEY;
+const DEEPSEEK_API_BASE = import.meta.env.VITE_DEEPSEEK_API_URL || 'https://api.deepseek.ai/v1';
+const DEEPSEEK_MODEL = import.meta.env.VITE_DEEPSEEK_MODEL || 'gpt-4o-mini';
+
+const deepseekFetch = async (path, body, opts = {}) => {
+  const url = path.startsWith('http') ? path : `${DEEPSEEK_API_BASE}${path}`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
+      ...(opts.headers || {}),
+    },
+    body: JSON.stringify(body),
+    ...opts,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Deepseek API error (${response.status}): ${errorText}`);
+  }
+
+  return response.json();
+};
 
 // Convierte un File a base64 (sin el prefijo data:...)
 const fileToBase64 = (file) =>
@@ -84,9 +107,9 @@ Responde ÚNICAMENTE en JSON con esta estructura exacta (sin markdown, sin bloqu
       formData.append('file', input, input.name);
       formData.append('purpose', 'assistants');
 
-      const uploadRes = await fetch('https://api.openai.com/v1/files', {
+      const uploadRes = await fetch(`${DEEPSEEK_API_BASE}/files`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
+        headers: { Authorization: `Bearer ${DEEPSEEK_API_KEY}` },
         body: formData,
       });
       const uploadData = await uploadRes.json();
@@ -95,11 +118,11 @@ Responde ÚNICAMENTE en JSON con esta estructura exacta (sin markdown, sin bloqu
 
       let resultData;
       try {
-        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        const response = await fetch(`${DEEPSEEK_API_BASE}/chat/completions`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${OPENAI_API_KEY}` },
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${DEEPSEEK_API_KEY}` },
           body: JSON.stringify({
-            model: 'gpt-4o',
+            model: DEEPSEEK_MODEL,
             messages: [
               { role: 'system', content: 'Eres un evaluador académico justo y detallado. Siempre respondes en JSON válido sin markdown ni bloques de código.' },
               {
@@ -112,19 +135,19 @@ Responde ÚNICAMENTE en JSON con esta estructura exacta (sin markdown, sin bloqu
             ],
             temperature: 0.3,
             response_format: { type: 'json_object' },
-            max_tokens: 2000,
+            max_tokens: 1400,
           }),
         });
         resultData = await response.json();
       } finally {
-        fetch(`https://api.openai.com/v1/files/${fileId}`, {
+        fetch(`${DEEPSEEK_API_BASE}/files/${fileId}`, {
           method: 'DELETE',
-          headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
+          headers: { Authorization: `Bearer ${DEEPSEEK_API_KEY}` },
         }).catch(() => {});
       }
 
       const content = resultData.choices?.[0]?.message?.content;
-      if (!content) throw new Error(resultData.error?.message || 'Sin respuesta de OpenAI');
+      if (!content) throw new Error(resultData.error?.message || 'Sin respuesta de Deepseek');
       return JSON.parse(content.replace(/```json|```/g, '').trim());
     } else {
       throw new Error(`Tipo de archivo no soportado: ${input.type || input.name}`);
@@ -132,24 +155,24 @@ Responde ÚNICAMENTE en JSON con esta estructura exacta (sin markdown, sin bloqu
   }
 
   // Texto plano
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+  const response = await fetch(`${DEEPSEEK_API_BASE}/chat/completions`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${OPENAI_API_KEY}` },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${DEEPSEEK_API_KEY}` },
     body: JSON.stringify({
-      model: 'gpt-4o',
+      model: DEEPSEEK_MODEL,
       messages: [
         { role: 'system', content: 'Eres un evaluador académico justo y detallado. Siempre respondes en JSON válido sin markdown ni bloques de código.' },
         { role: 'user', content: promptBase + `\n\n=== TRABAJO DEL ALUMNO ===\n${input}` },
       ],
       temperature: 0.3,
       response_format: { type: 'json_object' },
-      max_tokens: 2000,
+      max_tokens: 1400,
     }),
   });
 
   const data = await response.json();
   const content = data.choices?.[0]?.message?.content;
-  if (!content) throw new Error(data.error?.message || 'Sin respuesta de OpenAI');
+  if (!content) throw new Error(data.error?.message || 'Sin respuesta de Deepseek');
   return JSON.parse(content.replace(/```json|```/g, '').trim());
 };
 
@@ -206,9 +229,9 @@ Criterios de nivel:
         formData.append('file', input, input.name);
         formData.append('purpose', 'assistants');
 
-        const uploadRes = await fetch('https://api.openai.com/v1/files', {
+        const uploadRes = await fetch(`$\{DEEPSEEK_API_BASE\}/files`, {
           method: 'POST',
-          headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
+          headers: { Authorization: `Bearer ${DEEPSEEK_API_KEY}` },
           body: formData,
         });
         const uploadData = await uploadRes.json();
@@ -217,11 +240,11 @@ Criterios de nivel:
 
         let resultData;
         try {
-          const response = await fetch('https://api.openai.com/v1/chat/completions', {
+          const response = await fetch(`$\{DEEPSEEK_API_BASE\}/chat/completions`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${OPENAI_API_KEY}` },
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${DEEPSEEK_API_KEY}` },
             body: JSON.stringify({
-              model: 'gpt-4o',
+              model: DEEPSEEK_MODEL,
               messages: [
                 { role: 'system', content: 'Eres un detector de contenido generado por IA en trabajos académicos. Respondes en JSON válido.' },
                 {
@@ -234,14 +257,14 @@ Criterios de nivel:
               ],
               temperature: 0.2,
               response_format: { type: 'json_object' },
-              max_tokens: 800,
+              max_tokens: 700,
             }),
           });
           resultData = await response.json();
         } finally {
-          fetch(`https://api.openai.com/v1/files/${fileId}`, {
+          fetch(`${DEEPSEEK_API_BASE}/files/${fileId}`, {
             method: 'DELETE',
-            headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
+            headers: { Authorization: `Bearer ${DEEPSEEK_API_KEY}` },
           }).catch(() => {});
         }
 
@@ -257,18 +280,18 @@ Criterios de nivel:
       return { porcentajeIA: 0, nivel: 'Bajo', indicadores: [], veredicto: 'Sin texto para analizar', observacion: 'No se pudo analizar el contenido.' };
     }
 
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    const response = await fetch(`$\{DEEPSEEK_API_BASE\}/chat/completions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${OPENAI_API_KEY}` },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${DEEPSEEK_API_KEY}` },
       body: JSON.stringify({
-        model: 'gpt-4o',
+        model: DEEPSEEK_MODEL,
         messages: [
           { role: 'system', content: 'Eres un detector de contenido generado por IA en trabajos académicos. Respondes en JSON válido.' },
           { role: 'user', content: prompt + `\n\n=== TEXTO A ANALIZAR ===\n${textoAnalizar.substring(0, 6000)}` },
         ],
         temperature: 0.2,
         response_format: { type: 'json_object' },
-        max_tokens: 800,
+        max_tokens: 700,
       }),
     });
 
@@ -416,24 +439,24 @@ Genera un reporte pedagógico completo. Responde ÚNICAMENTE en JSON (sin markdo
   }
 }`;
 
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+  const response = await fetch(`${DEEPSEEK_API_BASE}/chat/completions`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${OPENAI_API_KEY}` },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${DEEPSEEK_API_KEY}` },
     body: JSON.stringify({
-      model: 'gpt-4o',
+      model: DEEPSEEK_MODEL,
       messages: [
         { role: 'system', content: 'Eres un experto en análisis pedagógico universitario. Respondes en JSON válido sin markdown.' },
         { role: 'user', content: prompt },
       ],
       temperature: 0.4,
       response_format: { type: 'json_object' },
-      max_tokens: 3000,
+      max_tokens: 2500,
     }),
   });
 
   const data = await response.json();
   const content = data.choices?.[0]?.message?.content;
-  if (!content) throw new Error(data.error?.message || 'Sin respuesta de OpenAI');
+  if (!content) throw new Error(data.error?.message || 'Sin respuesta de Deepseek');
   return JSON.parse(content.replace(/```json|```/g, '').trim());
 };
 
@@ -444,14 +467,15 @@ export const generarReporteClase = async (evaluaciones, cursoNombre) => {
 
   const prompt = `Analiza los resultados del curso "${cursoNombre}":\n${resumen}\n\nResponde en JSON:\n{\n  "promedioClase": número,\n  "distribucion": { "Excelente": número, "Bueno": número, "Regular": número, "Insuficiente": número },\n  "analisisGeneral": "análisis de 2-3 oraciones",\n  "recomendacionesDocente": ["rec1", "rec2", "rec3"]\n}`;
 
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+  const response = await fetch(`${DEEPSEEK_API_BASE}/chat/completions`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${OPENAI_API_KEY}` },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${DEEPSEEK_API_KEY}` },
     body: JSON.stringify({
-      model: 'gpt-4o',
+      model: DEEPSEEK_MODEL,
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.3,
       response_format: { type: 'json_object' },
+      max_tokens: 700,
     }),
   });
 
