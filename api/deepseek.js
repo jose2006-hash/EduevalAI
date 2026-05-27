@@ -1,8 +1,4 @@
-// api/deepseek.js  ← coloca este archivo en la carpeta /api de tu proyecto
-//
-// Proxy serverless para DeepSeek.
-// El navegador NO puede llamar a DeepSeek directamente (CORS).
-// Este endpoint corre en el servidor de Vercel, donde no hay restricción.
+// api/deepseek.js  ← carpeta /api en la raíz de tu proyecto
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -11,17 +7,18 @@ export default async function handler(req, res) {
 
   const { path, body, method = 'POST' } = req.body;
 
-  if (!path) {
-    return res.status(400).json({ error: 'Falta el campo "path"' });
-  }
+  if (!path) return res.status(400).json({ error: 'Falta el campo "path"' });
 
-  const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY; // ← sin VITE_
+  const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
   if (!DEEPSEEK_API_KEY) {
     return res.status(500).json({ error: 'DEEPSEEK_API_KEY no configurada en Vercel' });
   }
 
+  // ✅ URL correcta: api.deepseek.com (no api.deepseek.ai)
+  const url = `https://api.deepseek.com/v1${path}`;
+
   try {
-    const response = await fetch(`https://api.deepseek.ai/v1${path}`, {
+    const response = await fetch(url, {
       method,
       headers: {
         ...(method !== 'DELETE' && { 'Content-Type': 'application/json' }),
@@ -30,10 +27,7 @@ export default async function handler(req, res) {
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
 
-    // DELETE suele responder 204 sin cuerpo
-    if (response.status === 204) {
-      return res.status(204).end();
-    }
+    if (response.status === 204) return res.status(204).end();
 
     const data = await response.json();
     return res.status(response.status).json(data);
