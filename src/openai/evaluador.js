@@ -12,9 +12,8 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   import.meta.url
 ).toString();
 
-// Modelo para texto; para visión usamos siempre deepseek-vl2
-const DEEPSEEK_MODEL      = import.meta.env.VITE_DEEPSEEK_MODEL || 'deepseek-chat';
-const DEEPSEEK_VISION_MODEL = 'deepseek-vl2';
+// Modelo para texto (DeepSeek). PDFs van a Gemini Flash vía /api/evaluar-pdf
+const DEEPSEEK_MODEL = import.meta.env.VITE_DEEPSEEK_MODEL || 'deepseek-chat';
 
 // ─── Helper: llama al proxy Vercel ───────────────────────────────────────────
 const deepseekJSON = async (path, body) => {
@@ -135,33 +134,23 @@ Responde ÚNICAMENTE en JSON con esta estructura exacta (sin markdown, sin bloqu
       const images = await pdfToImages(input);
       if (images.length === 0) throw new Error('No se pudieron extraer páginas del PDF');
 
-      const userContent = [
-        {
-          type: 'text',
-          text: promptBase + `\n\nEl trabajo del alumno está en las ${images.length} imagen(es) adjuntas. Analiza TODAS las páginas.`,
-        },
-        ...images.map(img => ({
-          type: 'image_url',
-          image_url: { url: `data:image/jpeg;base64,${img}` },
-        })),
-      ];
-
-      const data = await deepseekJSON('/chat/completions', {
-        model: DEEPSEEK_VISION_MODEL,
-        messages: [
-          {
-            role: 'system',
-            content: 'Eres un evaluador académico justo y detallado. Siempre respondes en JSON válido sin markdown.',
-          },
-          { role: 'user', content: userContent },
-        ],
-        temperature: 0.3,
-        max_tokens: 1400,
+      // Usamos Gemini Flash (visión) vía nuestro proxy /api/evaluar-pdf
+      const res = await fetch('/api/evaluar-pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          images,
+          prompt:
+            'Eres un evaluador académico justo y detallado. Siempre respondes en JSON válido sin markdown ni bloques de código.\n\n' +
+            promptBase +
+            `\n\nEl trabajo del alumno está en las ${images.length} imagen(es) adjuntas. Analiza TODAS las páginas.`,
+        }),
       });
 
-      const content = data?.choices?.[0]?.message?.content;
-      if (!content) throw new Error(data?.error?.message || 'Sin respuesta de DeepSeek');
-      return JSON.parse(content.replace(/```json|```/g, '').trim());
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || 'Error al evaluar PDF con Gemini');
+
+      return JSON.parse(result.content.replace(/```json|```/g, '').trim());
     }
 
     if (isDocx) {
@@ -232,30 +221,18 @@ Niveles: Bajo 0-25%, Moderado 26-55%, Alto 56-80%, Muy alto 81-100%`;
       const isPdf = input.name?.toLowerCase().endsWith('.pdf');
       if (isPdf) {
         const images = await pdfToImages(input, 4);
-        const data = await deepseekJSON('/chat/completions', {
-          model: DEEPSEEK_VISION_MODEL,
-          messages: [
-            {
-              role: 'system',
-              content: 'Eres un detector de contenido generado por IA en trabajos académicos. Respondes en JSON válido.',
-            },
-            {
-              role: 'user',
-              content: [
-                { type: 'text', text: prompt + '\n\nAnaliza el texto escrito en las imágenes.' },
-                ...images.map(img => ({
-                  type: 'image_url',
-                  image_url: { url: `data:image/jpeg;base64,${img}` },
-                })),
-              ],
-            },
-          ],
-          temperature: 0.2,
-          max_tokens: 700,
+        const res = await fetch('/api/evaluar-pdf', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            images,
+            prompt: 'Eres un detector de contenido generado por IA. Respondes en JSON válido sin markdown.\n\n' +
+              prompt + '\n\nAnaliza el texto escrito en las imágenes adjuntas.',
+          }),
         });
-        const content = data?.choices?.[0]?.message?.content;
-        if (!content) throw new Error('Sin respuesta del detector de IA');
-        return JSON.parse(content.replace(/```json|```/g, '').trim());
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.error || 'Error en detección de IA');
+        return JSON.parse(result.content.replace(/```json|```/g, '').trim());
       }
     }
 
