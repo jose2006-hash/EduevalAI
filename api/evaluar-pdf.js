@@ -1,17 +1,16 @@
 // api/evaluar-pdf.js
 //
-// Usa Google Gemini Flash para evaluar PDFs con imágenes/escritura a mano.
-// Mucho más barato que Claude. Tier gratuito: 15 req/min.
+// Usa OpenRouter con Llama 4 Scout (gratis, soporta visión) para evaluar PDFs.
+// Sin tarjeta de crédito. Registro gratis en openrouter.ai
 //
-// Requiere en Vercel: GEMINI_API_KEY = AIza...
-// Obtener gratis en: https://aistudio.google.com
+// Requiere en Vercel: OPENROUTER_API_KEY = sk-or-...
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
 
-  const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-  if (!GEMINI_API_KEY) {
-    return res.status(500).json({ error: 'GEMINI_API_KEY no configurada en Vercel' });
+  const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+  if (!OPENROUTER_API_KEY) {
+    return res.status(500).json({ error: 'OPENROUTER_API_KEY no configurada en Vercel' });
   }
 
   const { images, prompt } = req.body;
@@ -20,30 +19,31 @@ export default async function handler(req, res) {
   }
 
   try {
-    const url = `https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
-
-    const response = await fetch(url, {
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+        'HTTP-Referer': 'https://edueval-ai.vercel.app',
+        'X-Title': 'EduEval AI',
+      },
       body: JSON.stringify({
-        contents: [
+        // Llama 4 Scout: gratis, soporta visión, excelente calidad
+        model: 'meta-llama/llama-4-scout:free',
+        messages: [
           {
-            parts: [
-              { text: prompt },
-              // Adjuntar cada página del PDF como imagen
+            role: 'user',
+            content: [
+              { type: 'text', text: prompt },
               ...images.map(imgBase64 => ({
-                inline_data: {
-                  mime_type: 'image/jpeg',
-                  data: imgBase64,
-                },
+                type: 'image_url',
+                image_url: { url: `data:image/jpeg;base64,${imgBase64}` },
               })),
             ],
           },
         ],
-        generationConfig: {
-          temperature: 0.3,
-          maxOutputTokens: 1500,
-        },
+        max_tokens: 1500,
+        temperature: 0.3,
       }),
     });
 
@@ -51,12 +51,12 @@ export default async function handler(req, res) {
 
     if (!response.ok) {
       return res.status(response.status).json({
-        error: data.error?.message || 'Error de Gemini',
+        error: data.error?.message || 'Error de OpenRouter',
       });
     }
 
-    const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!content) return res.status(500).json({ error: 'Sin respuesta de Gemini' });
+    const content = data.choices?.[0]?.message?.content;
+    if (!content) return res.status(500).json({ error: 'Sin respuesta del modelo' });
 
     return res.status(200).json({ content });
   } catch (err) {
