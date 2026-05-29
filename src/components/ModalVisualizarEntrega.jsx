@@ -4,7 +4,7 @@ import { editarNotaEntrega } from '../firebase/services.js';
 
 export default function ModalVisualizarEntrega({ entrega, onClose, onNotaActualizada }) {
   const [editando, setEditando] = useState(false);
-  const [notaEditada, setNotaEditada] = useState(entrega?.notaFinal || '');
+  const [notaEditada, setNotaEditada] = useState(entrega?.notaFinal ?? '');
   const [comentario, setComentario] = useState(entrega?.comentarioDocente || '');
   const [enviando, setEnviando] = useState(false);
   const [mensaje, setMensaje] = useState('');
@@ -26,6 +26,7 @@ export default function ModalVisualizarEntrega({ entrega, onClose, onNotaActuali
           notaFinal: parseFloat(notaEditada),
           notaEditadaManualmente: true,
           comentarioDocente: comentario,
+          estado: 'evaluado',
         });
       }
       setTimeout(() => setMensaje(''), 2000);
@@ -64,10 +65,16 @@ export default function ModalVisualizarEntrega({ entrega, onClose, onNotaActuali
           <div style={s.notaSection}>
             <div style={{ ...s.notaDisplay, borderTop: `4px solid ${nivelColor(entrega.notaFinal)}` }}>
               <div style={{ fontSize: '48px', fontWeight: '800', color: nivelColor(entrega.notaFinal) }}>
-                {entrega.notaFinal}<span style={{ fontSize: '18px', opacity: 0.5 }}>/20</span>
+                {entrega.notaFinal !== null && entrega.notaFinal !== undefined ? (
+                  <>
+                    {entrega.notaFinal}<span style={{ fontSize: '18px', opacity: 0.5 }}>/20</span>
+                  </>
+                ) : (
+                  <span style={{ fontSize: '20px', opacity: 0.7, color: '#cbd5e1' }}>Pendiente</span>
+                )}
               </div>
               <div style={{ color: nivelColor(entrega.notaFinal), fontWeight: '600', fontSize: '16px', marginTop: '6px' }}>
-                {entrega.nivelGlobal}
+                {entrega.notaFinal !== null && entrega.notaFinal !== undefined ? (entrega.nivelGlobal) : '—'}
               </div>
             </div>
 

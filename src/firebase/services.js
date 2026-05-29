@@ -322,6 +322,7 @@ export const actualizarEntregaAlumno = (id, datos) =>
 export const editarNotaEntrega = (id, notaFinal, comentarioDocente = '') =>
   updateDoc(doc(db, 'entregas', id), {
     notaFinal,
+    estado: 'evaluado',
     notaEditadaManualmente: true,
     comentarioDocente,
     editadoPorDocenteEn: serverTimestamp(),

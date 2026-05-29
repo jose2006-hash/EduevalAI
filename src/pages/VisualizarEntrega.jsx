@@ -49,6 +49,7 @@ export default function VisualizarEntrega() {
         notaFinal: parseFloat(notaEditada),
         notaEditadaManualmente: true,
         comentarioDocente: comentario,
+        estado: 'evaluado',
       }));
     } catch (err) {
       setMensaje('❌ Error al guardar la nota: ' + err.message);
@@ -93,10 +94,16 @@ export default function VisualizarEntrega() {
           <div style={s.card}>
             <div style={{ borderBottom: `3px solid ${nivelColor(entrega.notaFinal)}`, paddingBottom: '20px', marginBottom: '20px' }}>
               <div style={{ fontSize: '56px', fontWeight: '800', color: nivelColor(entrega.notaFinal) }}>
-                {entrega.notaFinal}<span style={{ fontSize: '22px', opacity: 0.5 }}>/20</span>
+                {entrega.notaFinal !== null && entrega.notaFinal !== undefined ? (
+                  <>
+                    {entrega.notaFinal}<span style={{ fontSize: '22px', opacity: 0.5 }}>/20</span>
+                  </>
+                ) : (
+                  <span style={{ fontSize: '22px', opacity: 0.7, color: '#cbd5e1' }}>Pendiente</span>
+                )}
               </div>
               <div style={{ color: nivelColor(entrega.notaFinal), fontWeight: '600', fontSize: '18px', marginTop: '8px' }}>
-                {entrega.nivelGlobal}
+                {entrega.notaFinal !== null && entrega.notaFinal !== undefined ? entrega.nivelGlobal : '—'}
               </div>
             </div>
 
@@ -137,7 +144,7 @@ export default function VisualizarEntrega() {
             {!editando ? (
               <button style={s.editarBtn} onClick={() => {
                 setEditando(true);
-                setNotaEditada(entrega.notaFinal);
+                setNotaEditada(entrega.notaFinal ?? '');
                 setComentario(entrega.comentarioDocente || '');
               }}>
                 ✏️ Editar nota manualmente
