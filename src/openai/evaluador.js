@@ -4,12 +4,12 @@
 // Los PDFs se convierten a imágenes en el navegador con pdf.js y se envían
 // como vision al modelo deepseek-vl2. No se usa la Files API (no existe en DeepSeek).
 
-import * as pdfjsLib from 'pdfjs-dist';
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { docxToText, esDocx } from '../utils/docxText.js';
 
-// Worker de pdf.js (Vite resuelve la URL automáticamente)
+// Worker legacy (incluye polyfills para Safari/iOS)
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.mjs',
+  'pdfjs-dist/legacy/build/pdf.worker.mjs',
   import.meta.url
 ).toString();
 
