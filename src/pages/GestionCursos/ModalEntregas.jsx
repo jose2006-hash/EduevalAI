@@ -191,9 +191,20 @@ export default function ModalEntregas({ cursoEntregas, entregas, docenteNombre, 
                                     ) : '—'}
                                   </td>
                                   <td style={{ ...s.td, whiteSpace: 'nowrap' }}>
-                                    <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '12px' }}>
-                                      {e.creadoEn?.toDate?.()?.toLocaleDateString('es-PE') || '—'}
-                                    </span>
+                                    {(() => {
+                                      const d = e.creadoEn?.toDate?.();
+                                      if (!d) return <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '12px' }}>—</span>;
+                                      return (
+                                        <div>
+                                          <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px' }}>
+                                            {d.toLocaleDateString('es-PE')}
+                                          </div>
+                                          <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px' }}>
+                                            {d.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' })}
+                                          </div>
+                                        </div>
+                                      );
+                                    })()}
                                   </td>
                                   <td style={s.td} onClick={ev => ev.stopPropagation()}>
                                     <button style={s.expulsarBtn} onClick={() => onEliminar(e)}>🗑</button>

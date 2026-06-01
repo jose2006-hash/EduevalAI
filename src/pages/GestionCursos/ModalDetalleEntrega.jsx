@@ -73,6 +73,11 @@ export default function ModalDetalleEntrega({ entrega: entregaInicial, onNotaGua
               👤 {entrega.alumnoNombre} · {entrega.tipoEvaluacion}
               {entrega.actividadTitulo && ` · ${entrega.actividadTitulo}`}
             </p>
+            {entrega.creadoEn?.toDate && (
+              <p style={{ color: 'rgba(255,255,255,0.25)', fontSize: '12px', margin: '4px 0 0' }}>
+                🕐 Entregado el {entrega.creadoEn.toDate().toLocaleDateString('es-PE')} a las {entrega.creadoEn.toDate().toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' })}
+              </p>
+            )}
           </div>
           <div style={{ display: 'flex', gap: '8px' }}>
             <button style={s.expulsarBtn} onClick={() => onEliminar(entrega)}>🗑</button>
