@@ -128,22 +128,49 @@ export default function CursoAlumno() {
     setError(''); setEnviando(true); setMsg('');
 
     try {
-      const rubrica = rubricas.find(r => r.id === form.rubricaId) || rubricas[0];
+      const rubrica = rubricas.find(r => r.id === form.rubricaId)
+        || rubricas.find(r => r.id === actividadSeleccionada?.rubricaId)
+        || rubricas[0];
       const enunciadoTexto = actividadSeleccionada?.enunciadoTexto || '';
 
-      // 1️⃣ Evaluar con rúbrica
+      // 1️⃣ Evaluar con rúbrica (no bloquea el envío si falla)
       let resultado = null;
-      if (rubrica) {
-        setFaseProceso('evaluando');
-        resultado = await evaluarTrabajo(
-          archivo, rubrica, curso.nombre, form.titulo,
-          curso.silaboTexto || '', enunciadoTexto
-        );
+      let errorEvaluacion = null;
+      const archivoEval = archivo || (editEntrega?.archivoUrl
+        ? await (async () => {
+            const res = await fetch(editEntrega.archivoUrl);
+            const blob = await res.blob();
+            const nombre = editEntrega.archivoNombre || 'trabajo.pdf';
+            const ext = nombre.toLowerCase();
+            const type = ext.endsWith('.docx')
+              ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+              : 'application/pdf';
+            return new File([blob], nombre, { type });
+          })()
+        : null);
+
+      if (rubrica && archivoEval) {
+        try {
+          setFaseProceso('evaluando');
+          resultado = await evaluarTrabajo(
+            archivoEval, rubrica, curso.nombre, form.titulo,
+            curso.silaboTexto || '', enunciadoTexto
+          );
+        } catch (err) {
+          errorEvaluacion = err.message;
+        }
       }
 
-      // 2️⃣ Detectar IA (siempre, en paralelo o secuencial si no hay rúbrica)
+      // 2️⃣ Detectar IA
       setFaseProceso('detectando');
-      const iaResultado = await detectarIA(archivo);
+      let iaResultado = null;
+      if (archivoEval) {
+        try {
+          iaResultado = await detectarIA(archivoEval);
+        } catch {
+          iaResultado = { porcentajeIA: null, veredicto: 'No se pudo analizar' };
+        }
+      }
 
       // 3️⃣ Subir archivo a Storage
       const timestamp = Date.now();
@@ -164,9 +191,11 @@ export default function CursoAlumno() {
         texto:          '',
         archivoNombre:  archivoData?.archivoNombre || archivo?.name || null,
         archivoUrl:     archivoData?.archivoUrl || null,
-        rubricaId:      rubrica?.id || null,
+        rubricaId:      rubrica?.id || actividadSeleccionada?.rubricaId || null,
         rubricaNombre:  rubrica?.nombre || null,
         estado:         resultado ? 'evaluado' : 'pendiente',
+        evaluadoPorIA:  !!resultado,
+        errorEvaluacion: errorEvaluacion || null,
         // Resultado evaluación rúbrica
         ...(resultado || {}),
         // Resultado detector de IA
@@ -179,11 +208,11 @@ export default function CursoAlumno() {
 
       if (editEntrega) {
         await actualizarEntregaAlumno(editEntrega.id, datosEntrega);
-        setMsg('✅ Entrega actualizada y re-evaluada');
+        setMsg(resultado ? '✅ Entrega actualizada y re-evaluada' : `⚠️ Entrega guardada. ${errorEvaluacion || 'La evaluación automática no pudo completarse.'}`);
         setEditEntrega(null);
       } else {
         await crearEntrega(datosEntrega);
-        setMsg('✅ Trabajo enviado y evaluado correctamente');
+        setMsg(resultado ? '✅ Trabajo enviado y evaluado correctamente' : `⚠️ Trabajo enviado. ${errorEvaluacion || 'La evaluación automática no pudo completarse; el docente la revisará.'}`);
       }
 
       setShowForm(false); resetForm(); await cargar();

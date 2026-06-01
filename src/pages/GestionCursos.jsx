@@ -11,7 +11,7 @@ import {
   actualizarEntregaAlumno,
   actualizarActividad,
 } from '../firebase/services.js';
-import { generarReporteEstadistico } from '../openai/evaluador.js';
+import { generarReporteEstadistico, evaluarTrabajo, detectarIA, archivoDesdeUrl } from '../openai/evaluador.js';
 import { useAuth } from '../components/AuthContext.jsx';
 
 const TIPOS_DEFAULT = [
@@ -77,6 +77,8 @@ export default function GestionCursos() {
   const [comentarioDocente, setComentarioDocente] = useState('');
   const [guardandoNota, setGuardandoNota] = useState(false);
   const [msgNota, setMsgNota] = useState('');
+  const [evaluandoIA, setEvaluandoIA] = useState(false);
+  const [errorIA, setErrorIA] = useState('');
 
   // Reporte estadístico
   const [showReporte, setShowReporte] = useState(false);
@@ -156,6 +158,79 @@ export default function GestionCursos() {
   };
 
   const abrirEditarNota = () => { setNotaEditada(String(entregaDetalle.notaFinal ?? '')); setComentarioDocente(entregaDetalle.comentarioDocente || ''); setMsgNota(''); setEditandoNota(true); };
+
+  const handleEvaluarConIA = async () => {
+    if (!entregaDetalle?.archivoUrl) {
+      setErrorIA('❌ No hay archivo para evaluar.');
+      return;
+    }
+
+    setEvaluandoIA(true);
+    setErrorIA('');
+    setMsgNota('');
+
+    try {
+      const [rubs, acts] = await Promise.all([
+        getRubricas(cursoEntregas.id),
+        getActividadesByCurso(cursoEntregas.id),
+      ]);
+      const actividad = acts.find(a => a.id === entregaDetalle.actividadId);
+      const rubricaId = entregaDetalle.rubricaId || actividad?.rubricaId;
+      const rubrica = rubs.find(r => r.id === rubricaId) || rubs[0];
+      if (!rubrica) throw new Error('No hay rúbrica asignada a esta entrega. Asigna una rúbrica a la actividad o edita la nota manualmente.');
+
+      const file = await archivoDesdeUrl(entregaDetalle.archivoUrl, entregaDetalle.archivoNombre || 'trabajo.pdf');
+      const enunciadoTexto = actividad?.enunciadoTexto || '';
+
+      const resultado = await evaluarTrabajo(
+        file,
+        rubrica,
+        entregaDetalle.cursoNombre || cursoEntregas.nombre,
+        entregaDetalle.actividadTitulo || entregaDetalle.titulo || '',
+        cursoEntregas.silaboTexto || '',
+        enunciadoTexto
+      );
+
+      let iaResultado = null;
+      try {
+        iaResultado = await detectarIA(file);
+      } catch { /* no bloquea la nota */ }
+
+      const datosActualizados = {
+        notaFinal: resultado.notaFinal,
+        nivelGlobal: resultado.nivelGlobal,
+        porcentaje: resultado.porcentaje,
+        criterios: resultado.criterios,
+        fortalezas: resultado.fortalezas,
+        areasDesMejora: resultado.areasDesMejora,
+        retroalimentacionGeneral: resultado.retroalimentacionGeneral,
+        recomendaciones: resultado.recomendaciones,
+        rubricaId: rubrica.id,
+        rubricaNombre: rubrica.nombre,
+        estado: 'evaluado',
+        evaluadoPorIA: true,
+        notaEditadaManualmente: false,
+        errorEvaluacion: null,
+        ...(iaResultado ? {
+          porcentajeIA: iaResultado.porcentajeIA ?? null,
+          iaNivel: iaResultado.nivel || null,
+          iaVeredicto: iaResultado.veredicto || null,
+          iaObservacion: iaResultado.observacion || null,
+          iaIndicadores: iaResultado.indicadores || [],
+        } : {}),
+      };
+
+      await actualizarEntregaAlumno(entregaDetalle.id, datosActualizados);
+      const entregaActualizada = { ...entregaDetalle, ...datosActualizados };
+      setEntregaDetalle(entregaActualizada);
+      setEntregas(await getEntregasByCurso(cursoEntregas.id));
+      setMsgNota('✅ Evaluación IA completada');
+    } catch (err) {
+      setErrorIA('❌ ' + err.message);
+    } finally {
+      setEvaluandoIA(false);
+    }
+  };
 
   const abrirEntregas = async (curso) => {
     setCursoEntregas(curso);
@@ -762,12 +837,29 @@ export default function GestionCursos() {
                         <div style={{ color: nivelColor(entregaDetalle.notaFinal), fontWeight: '600', fontSize: '16px' }}>
                           {entregaDetalle.nivelGlobal}
                           {entregaDetalle.notaEditadaManualmente && <span style={{ color: '#60a5fa', fontSize: '12px', marginLeft: '8px' }}>✏️ Editada</span>}
+                          {entregaDetalle.evaluadoPorIA && !entregaDetalle.notaEditadaManualmente && <span style={{ color: '#a78bfa', fontSize: '12px', marginLeft: '8px' }}>🤖 IA</span>}
                         </div>
                         {entregaDetalle.comentarioDocente && <p style={{ color: '#93c5fd', fontSize: '13px', margin: '6px 0 0', fontStyle: 'italic' }}>"{entregaDetalle.comentarioDocente}"</p>}
                       </>
                     ) : <span style={{ color: '#f59e0b', fontSize: '16px' }}>⏳ Sin evaluar</span>}
+                    {entregaDetalle.errorEvaluacion && (
+                      <p style={{ color: '#f87171', fontSize: '12px', margin: '8px 0 0', maxWidth: '320px' }}>
+                        ⚠️ {entregaDetalle.errorEvaluacion}
+                      </p>
+                    )}
                   </div>
-                  <button style={s.editarNotaBtn} onClick={abrirEditarNota}>✏️ {entregaDetalle.estado === 'evaluado' ? 'Modificar nota' : 'Asignar nota'}</button>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'stretch' }}>
+                    {entregaDetalle.estado !== 'evaluado' && entregaDetalle.archivoUrl && (
+                      <button
+                        style={{ ...s.primaryBtn, background: 'linear-gradient(135deg,#667eea,#764ba2)', opacity: evaluandoIA ? 0.7 : 1 }}
+                        onClick={handleEvaluarConIA}
+                        disabled={evaluandoIA}
+                      >
+                        {evaluandoIA ? '🤖 Evaluando...' : '🤖 Evaluar con IA'}
+                      </button>
+                    )}
+                    <button style={s.editarNotaBtn} onClick={abrirEditarNota}>✏️ {entregaDetalle.estado === 'evaluado' ? 'Modificar nota' : 'Asignar nota'}</button>
+                  </div>
                 </div>
               ) : (
                 <div>
@@ -784,11 +876,18 @@ export default function GestionCursos() {
                     </div>
                   </div>
                   {msgNota && <p style={{ color: msgNota.includes('✅') ? '#22c55e' : '#ef4444', fontSize: '13px', margin: '0 0 10px' }}>{msgNota}</p>}
+                  {errorIA && <p style={{ color: '#ef4444', fontSize: '13px', margin: '0 0 10px' }}>{errorIA}</p>}
                   <div style={{ display: 'flex', gap: '10px' }}>
                     <button style={s.secondaryBtn} onClick={() => { setEditandoNota(false); setMsgNota(''); }}>Cancelar</button>
                     <button style={s.primaryBtn} onClick={handleGuardarNota} disabled={guardandoNota}>{guardandoNota ? 'Guardando...' : '💾 Guardar nota'}</button>
                   </div>
                 </div>
+              )}
+              {!editandoNota && errorIA && (
+                <p style={{ color: '#ef4444', fontSize: '13px', margin: '10px 0 0', textAlign: 'center' }}>{errorIA}</p>
+              )}
+              {!editandoNota && msgNota && (
+                <p style={{ color: msgNota.includes('✅') ? '#22c55e' : '#ef4444', fontSize: '13px', margin: '10px 0 0', textAlign: 'center' }}>{msgNota}</p>
               )}
             </div>
 

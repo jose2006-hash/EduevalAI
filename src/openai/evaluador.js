@@ -5,6 +5,7 @@
 // como vision al modelo deepseek-vl2. No se usa la Files API (no existe en DeepSeek).
 
 import * as pdfjsLib from 'pdfjs-dist';
+import { docxToText, esDocx } from '../utils/docxText.js';
 
 // Worker de pdf.js (Vite resuelve la URL automáticamente)
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
@@ -50,14 +51,35 @@ const pdfToImages = async (file, maxPages = 8) => {
   return images;
 };
 
-// ─── Helper: File → base64 (para DOCX u otros formatos de texto) ─────────────
-const fileToBase64 = (file) =>
-  new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload  = () => resolve(reader.result.split(',')[1]);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
+// ─── Helper: parsear respuesta JSON de la IA ─────────────────────────────────
+const parseJsonRespuesta = (content) => {
+  const parsed = JSON.parse(content.replace(/```json|```/g, '').trim());
+  if (parsed.notaFinal == null && parsed.criterios?.length) {
+    parsed.notaFinal = parsed.criterios.reduce((s, c) => s + (Number(c.puntajeObtenido) || 0), 0);
+  }
+  if (parsed.porcentaje == null && parsed.notaFinal != null) {
+    parsed.porcentaje = Math.round((parsed.notaFinal / 20) * 100);
+  }
+  if (!parsed.nivelGlobal && parsed.notaFinal != null) {
+    const n = parsed.notaFinal;
+    parsed.nivelGlobal = n >= 17 ? 'Excelente' : n >= 14 ? 'Bueno' : n >= 11 ? 'Regular' : 'Insuficiente';
+  }
+  return parsed;
+};
+
+// ─── Helper: descargar archivo desde URL (reevaluación docente) ──────────────
+export const archivoDesdeUrl = async (url, nombre = 'trabajo.pdf') => {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error('No se pudo descargar el archivo de la entrega');
+  const blob = await response.blob();
+  const ext = nombre.toLowerCase();
+  const type = ext.endsWith('.docx')
+    ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    : ext.endsWith('.pdf')
+    ? 'application/pdf'
+    : blob.type || 'application/octet-stream';
+  return new File([blob], nombre, { type });
+};
 
 // ─── EVALUACIÓN PRINCIPAL ────────────────────────────────────────────────────
 
@@ -126,9 +148,6 @@ Responde ÚNICAMENTE en JSON con esta estructura exacta (sin markdown, sin bloqu
   // ── PDF → imágenes → vision ───────────────────────────────────────────────
   if (input instanceof File) {
     const isPdf  = input.type === 'application/pdf' || input.name?.toLowerCase().endsWith('.pdf');
-    const isDocx =
-      input.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
-      input.name?.toLowerCase().endsWith('.docx');
 
     if (isPdf) {
       const images = await pdfToImages(input);
@@ -150,19 +169,15 @@ Responde ÚNICAMENTE en JSON con esta estructura exacta (sin markdown, sin bloqu
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || 'Error al evaluar PDF con Gemini');
 
-      return JSON.parse(result.content.replace(/```json|```/g, '').trim());
+      return parseJsonRespuesta(result.content);
     }
 
-    if (isDocx) {
-      // DOCX: no hay forma fácil de renderizarlo como imagen en el navegador,
-      // así que lo enviamos como base64 en texto y pedimos que lo interprete.
-      throw new Error(
-        'Los archivos .docx no son compatibles con análisis de visión. ' +
-        'Convierte el documento a PDF antes de subirlo.'
-      );
+    if (esDocx(input)) {
+      const texto = await docxToText(input);
+      return evaluarTrabajo(texto, rubrica, curso, tema, silaboTexto, enunciadoTexto);
     }
 
-    throw new Error(`Tipo de archivo no soportado: ${input.type || input.name}`);
+    throw new Error(`Tipo de archivo no soportado: ${input.type || input.name}. Usa PDF o Word (.docx).`);
   }
 
   // ── Texto plano ───────────────────────────────────────────────────────────
@@ -185,7 +200,7 @@ Responde ÚNICAMENTE en JSON con esta estructura exacta (sin markdown, sin bloqu
 
   const content = data?.choices?.[0]?.message?.content;
   if (!content) throw new Error(data?.error?.message || 'Sin respuesta de DeepSeek');
-  return JSON.parse(content.replace(/```json|```/g, '').trim());
+  return parseJsonRespuesta(content);
 };
 
 // ─── DETECTOR DE IA ──────────────────────────────────────────────────────────
@@ -218,7 +233,7 @@ Niveles: Bajo 0-25%, Moderado 26-55%, Alto 56-80%, Muy alto 81-100%`;
 
   try {
     if (input instanceof File) {
-      const isPdf = input.name?.toLowerCase().endsWith('.pdf');
+      const isPdf = input.name?.toLowerCase().endsWith('.pdf') || input.type === 'application/pdf';
       if (isPdf) {
         const images = await pdfToImages(input, 4);
         const res = await fetch('/api/evaluar-pdf', {
@@ -232,18 +247,23 @@ Niveles: Bajo 0-25%, Moderado 26-55%, Alto 56-80%, Muy alto 81-100%`;
         });
         const result = await res.json();
         if (!res.ok) throw new Error(result.error || 'Error en detección de IA');
-        return JSON.parse(result.content.replace(/```json|```/g, '').trim());
+        return parseJsonRespuesta(result.content);
+      }
+
+      if (esDocx(input)) {
+        const texto = await docxToText(input);
+        return detectarIA(texto);
       }
     }
 
     const textoAnalizar = typeof input === 'string' ? input : '';
     if (!textoAnalizar.trim()) {
       return {
-        porcentajeIA: 0,
-        nivel: 'Bajo',
+        porcentajeIA: null,
+        nivel: 'No disponible',
         indicadores: [],
-        veredicto: 'Sin texto para analizar',
-        observacion: 'No se pudo analizar el contenido.',
+        veredicto: 'Sin contenido analizable',
+        observacion: 'No se pudo extraer texto del archivo para analizar.',
       };
     }
 
@@ -266,7 +286,7 @@ Niveles: Bajo 0-25%, Moderado 26-55%, Alto 56-80%, Muy alto 81-100%`;
 
     const content = data?.choices?.[0]?.message?.content;
     if (!content) throw new Error('Sin respuesta del detector de IA');
-    return JSON.parse(content.replace(/```json|```/g, '').trim());
+    return parseJsonRespuesta(content);
   } catch (err) {
     console.error('Error en detectarIA:', err);
     return {

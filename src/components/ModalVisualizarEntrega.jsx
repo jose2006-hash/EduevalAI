@@ -1,7 +1,7 @@
 // src/components/ModalVisualizarEntrega.jsx
 import { useState } from 'react';
 import { editarNotaEntrega, getRubricas } from '../firebase/services.js';
-import { evaluarTrabajo } from '../openai/evaluador.js';
+import { evaluarTrabajo, archivoDesdeUrl } from '../openai/evaluador.js';
 import { actualizarEntrega } from '../firebase/services.js';
 
 export default function ModalVisualizarEntrega({ entrega: entregaInicial, onClose, onNotaActualizada }) {
@@ -36,10 +36,8 @@ export default function ModalVisualizarEntrega({ entrega: entregaInicial, onClos
       const rubrica = rubricas.find(r => r.id === entrega.rubricaId);
       if (!rubrica) throw new Error('No se encontró la rúbrica asociada a esta entrega.');
 
-      // 2. Descargar el PDF como File para pasarlo a evaluarTrabajo()
-      const response = await fetch(entrega.archivoUrl);
-      const blob = await response.blob();
-      const file = new File([blob], entrega.archivoNombre || 'trabajo.pdf', { type: 'application/pdf' });
+      // 2. Descargar el archivo para pasarlo a evaluarTrabajo()
+      const file = await archivoDesdeUrl(entrega.archivoUrl, entrega.archivoNombre || 'trabajo.pdf');
 
       // 3. Llamar al evaluador de IA
       const resultado = await evaluarTrabajo(
