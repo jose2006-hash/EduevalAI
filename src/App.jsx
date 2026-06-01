@@ -7,7 +7,7 @@ import Login from './pages/Login.jsx';
 import DashboardDocente from './pages/DashboardDocente.jsx';
 import GestionRubricas from './pages/GestionRubricas.jsx';
 import GestionAlumnos from './pages/GestionAlumnos.jsx';
-import GestionCursos from './pages/GestionCursos.jsx';
+import GestionCursos from './pages/GestionCursos/index.jsx'; // ← CAMBIADO
 import MisCursos from './pages/MisCursos.jsx';
 import CursoAlumno from './pages/CursoAlumno.jsx';
 import UnirseACurso from './pages/UnirseACurso.jsx';
