@@ -22,7 +22,6 @@ const esArchivoValido = (file) =>
   file.name?.toLowerCase().endsWith('.pdf') ||
   file.name?.toLowerCase().endsWith('.docx');
 
-// ── Helper badge IA ──────────────────────────────────────────────────────────
 const iaBadgeStyle = (pct) => {
   if (pct == null) return null;
   const bg    = pct >= 81 ? 'rgba(239,68,68,0.15)'   : pct >= 56 ? 'rgba(245,158,11,0.15)' : pct >= 26 ? 'rgba(99,102,241,0.15)' : 'rgba(34,197,94,0.12)';
@@ -54,7 +53,7 @@ export default function CursoAlumno() {
   const [actividadSeleccionada, setActividadSeleccionada] = useState(null);
   const [archivo, setArchivo] = useState(null);
   const [enviando, setEnviando] = useState(false);
-  const [faseProceso, setFaseProceso] = useState(''); // 'evaluando' | 'detectando' | ''
+  const [faseProceso, setFaseProceso] = useState(''); // 'subiendo' | 'evaluando' | 'detectando' | ''
   const [error, setError] = useState('');
   const [msg, setMsg] = useState('');
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState('');
@@ -107,7 +106,7 @@ export default function CursoAlumno() {
   const handleDrop      = async (e) => { e.preventDefault(); setDragging(false); await procesarArchivo(e.dataTransfer.files[0]); };
   const handleFileInput = async (e) => { await procesarArchivo(e.target.files[0]); };
 
-  // ── Enviar trabajo: evalúa con IA y detecta contenido IA ─────────────────
+  // ── Enviar trabajo ────────────────────────────────────────────────────────
   const handleEnviar = async () => {
     if (!archivo && !editEntrega?.archivoUrl) return setError('Sube un PDF o archivo Word');
     if (!form.tipoEvaluacion) return setError('Selecciona el tipo de evaluación');
@@ -133,93 +132,104 @@ export default function CursoAlumno() {
         || rubricas[0];
       const enunciadoTexto = actividadSeleccionada?.enunciadoTexto || '';
 
-      // 1️⃣ Evaluar con rúbrica (no bloquea el envío si falla)
+      // 1️⃣ Subir archivo PRIMERO — así queda guardado aunque la IA falle
+      let archivoData = {
+        archivoNombre: editEntrega?.archivoNombre || null,
+        archivoUrl:    editEntrega?.archivoUrl    || null,
+      };
+      if (archivo) {
+        setFaseProceso('subiendo');
+        archivoData = await subirPdfEntrega(archivo, user.uid, cursoId, Date.now());
+      }
+
+      // Archivo a evaluar: el nuevo subido o el existente descargado
+      let archivoEval = archivo;
+      if (!archivoEval && editEntrega?.archivoUrl) {
+        try {
+          const res  = await fetch(editEntrega.archivoUrl);
+          const blob = await res.blob();
+          const nombre = editEntrega.archivoNombre || 'trabajo.pdf';
+          const type   = nombre.toLowerCase().endsWith('.docx')
+            ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+            : 'application/pdf';
+          archivoEval = new File([blob], nombre, { type });
+        } catch { archivoEval = null; }
+      }
+
+      // 2️⃣ Evaluar con IA (fallo no bloquea el guardado)
       let resultado = null;
       let errorEvaluacion = null;
-      const archivoEval = archivo || (editEntrega?.archivoUrl
-        ? await (async () => {
-            const res = await fetch(editEntrega.archivoUrl);
-            const blob = await res.blob();
-            const nombre = editEntrega.archivoNombre || 'trabajo.pdf';
-            const ext = nombre.toLowerCase();
-            const type = ext.endsWith('.docx')
-              ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-              : 'application/pdf';
-            return new File([blob], nombre, { type });
-          })()
-        : null);
-
       if (rubrica && archivoEval) {
+        setFaseProceso('evaluando');
         try {
-          setFaseProceso('evaluando');
           resultado = await evaluarTrabajo(
             archivoEval, rubrica, curso.nombre, form.titulo,
             curso.silaboTexto || '', enunciadoTexto
           );
         } catch (err) {
           errorEvaluacion = err.message;
+          console.warn('Evaluación IA falló:', err.message);
         }
       }
 
-      // 2️⃣ Detectar IA
-      setFaseProceso('detectando');
+      // 3️⃣ Detectar IA (fallo tampoco bloquea)
       let iaResultado = null;
       if (archivoEval) {
+        setFaseProceso('detectando');
         try {
           iaResultado = await detectarIA(archivoEval);
         } catch {
-          iaResultado = { porcentajeIA: null, veredicto: 'No se pudo analizar' };
+          iaResultado = null;
         }
       }
 
-      // 3️⃣ Subir archivo a Storage
-      const timestamp = Date.now();
-      let archivoData = { archivoNombre: editEntrega?.archivoNombre || null, archivoUrl: editEntrega?.archivoUrl || null };
-      if (archivo) {
-        archivoData = await subirPdfEntrega(archivo, user.uid, cursoId, timestamp);
-      }
-
       const datosEntrega = {
-        alumnoUid:      user.uid,
-        alumnoNombre:   userData.nombre,
+        alumnoUid:       user.uid,
+        alumnoNombre:    userData.nombre,
         cursoId,
-        cursoNombre:    curso.nombre,
-        tipoEvaluacion: form.tipoEvaluacion,
-        actividadId:    form.actividadId || null,
+        cursoNombre:     curso.nombre,
+        tipoEvaluacion:  form.tipoEvaluacion,
+        actividadId:     form.actividadId     || null,
         actividadTitulo: actividadSeleccionada?.titulo || null,
-        titulo:         form.titulo,
-        texto:          '',
-        archivoNombre:  archivoData?.archivoNombre || archivo?.name || null,
-        archivoUrl:     archivoData?.archivoUrl || null,
-        rubricaId:      rubrica?.id || actividadSeleccionada?.rubricaId || null,
-        rubricaNombre:  rubrica?.nombre || null,
-        estado:         resultado ? 'evaluado' : 'pendiente',
-        evaluadoPorIA:  !!resultado,
+        titulo:          form.titulo,
+        texto:           '',
+        archivoNombre:   archivoData?.archivoNombre || archivo?.name || null,
+        archivoUrl:      archivoData?.archivoUrl    || null,
+        rubricaId:       rubrica?.id || actividadSeleccionada?.rubricaId || null,
+        rubricaNombre:   rubrica?.nombre || null,
+        estado:          resultado ? 'evaluado' : 'pendiente',
+        evaluadoPorIA:   !!resultado,
         errorEvaluacion: errorEvaluacion || null,
-        // Resultado evaluación rúbrica
         ...(resultado || {}),
-        // Resultado detector de IA
-        porcentajeIA:   iaResultado?.porcentajeIA ?? null,
-        iaNivel:        iaResultado?.nivel || null,
-        iaVeredicto:    iaResultado?.veredicto || null,
-        iaObservacion:  iaResultado?.observacion || null,
-        iaIndicadores:  iaResultado?.indicadores || [],
+        porcentajeIA:    iaResultado?.porcentajeIA ?? null,
+        iaNivel:         iaResultado?.nivel        || null,
+        iaVeredicto:     iaResultado?.veredicto    || null,
+        iaObservacion:   iaResultado?.observacion  || null,
+        iaIndicadores:   iaResultado?.indicadores  || [],
       };
+
+      const msgExito = resultado
+        ? '✅ Trabajo enviado y evaluado correctamente'
+        : `⚠️ Trabajo guardado. ${errorEvaluacion ? `Error IA: ${errorEvaluacion}` : 'La evaluación automática no pudo completarse; el docente la revisará.'}`;
 
       if (editEntrega) {
         await actualizarEntregaAlumno(editEntrega.id, datosEntrega);
-        setMsg(resultado ? '✅ Entrega actualizada y re-evaluada' : `⚠️ Entrega guardada. ${errorEvaluacion || 'La evaluación automática no pudo completarse.'}`);
         setEditEntrega(null);
       } else {
         await crearEntrega(datosEntrega);
-        setMsg(resultado ? '✅ Trabajo enviado y evaluado correctamente' : `⚠️ Trabajo enviado. ${errorEvaluacion || 'La evaluación automática no pudo completarse; el docente la revisará.'}`);
       }
 
-      setShowForm(false); resetForm(); await cargar();
+      setMsg(msgExito);
+      setShowForm(false);
+      resetForm();
+      await cargar();
+
     } catch (err) {
+      console.error('Error al enviar entrega:', err);
       setError('Error al procesar: ' + err.message);
     } finally {
-      setEnviando(false); setFaseProceso('');
+      setEnviando(false);
+      setFaseProceso('');
     }
   };
 
@@ -382,14 +392,13 @@ export default function CursoAlumno() {
                     <div key={i} style={s.entregaCard} onClick={() => setEntregaSeleccionada(e)}>
                       <div style={s.entregaTop}>
                         <span style={s.entregaTitulo}>{e.titulo}</span>
-                        <span style={{ ...s.estadoBadge, color: e.estado === 'evaluado' ? nivelColor(e.notaFinal) : '#f59e0b', background: e.estado === 'evaluado' ? `${nivelColor(e.notaFinal)}22` : '#f59e0b22' }}>
-                          {e.estado === 'evaluado' ? `${e.notaFinal}/20` : '⏳'}
+                        <span style={{ ...s.estadoBadge, color: e.estado === 'evaluado' ? nivelColor(e.notaFinal) : e.errorEvaluacion ? '#ef4444' : '#f59e0b', background: e.estado === 'evaluado' ? `${nivelColor(e.notaFinal)}22` : e.errorEvaluacion ? '#ef444422' : '#f59e0b22' }}>
+                          {e.estado === 'evaluado' ? `${e.notaFinal}/20` : e.errorEvaluacion ? '❌ Error IA' : '⏳'}
                         </span>
                       </div>
                       {e.notaEditadaManualmente && <span style={{ color: '#60a5fa', fontSize: '10px' }}>✏️ Nota ajustada por docente</span>}
                       {e.actividadTitulo && <p style={s.actividadTag}>📋 {e.actividadTitulo}</p>}
                       {e.archivoNombre && <p style={s.archivoTag}>📄 {e.archivoNombre}</p>}
-                      {/* Badge IA */}
                       {iab && (
                         <span style={{ display: 'inline-block', marginTop: '4px', background: iab.bg, color: iab.color, border: `1px solid ${iab.color}44`, padding: '2px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: '700' }}>
                           {iab.label}
@@ -532,8 +541,10 @@ export default function CursoAlumno() {
             {enviando && (
               <div style={s.evaluandoMsg}>
                 <div style={s.spinner} />
-                {faseProceso === 'evaluando'
-                  ? `Evaluando con IA${actividadSeleccionada?.enunciadoTexto ? ' (con enunciado del docente)' : ''}...`
+                {faseProceso === 'subiendo'
+                  ? '📤 Subiendo archivo...'
+                  : faseProceso === 'evaluando'
+                  ? `🤖 Evaluando con IA${actividadSeleccionada?.enunciadoTexto ? ' (con enunciado del docente)' : ''}...`
                   : faseProceso === 'detectando'
                   ? '🔍 Analizando contenido generado por IA...'
                   : 'Procesando...'}
@@ -575,35 +586,39 @@ export default function CursoAlumno() {
               </div>
             )}
 
+            {/* Error de evaluación IA */}
+            {entregaSeleccionada.errorEvaluacion && (
+              <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: '10px', padding: '10px 14px', marginBottom: '16px', fontSize: '13px', color: '#fca5a5' }}>
+                ⚠️ La evaluación automática falló: {entregaSeleccionada.errorEvaluacion}. El docente puede evaluarlo manualmente.
+              </div>
+            )}
+
             {/* Nota */}
             <div style={{ textAlign: 'center', padding: '20px 0', borderBottom: '1px solid rgba(255,255,255,0.06)', marginBottom: '20px' }}>
-              <div style={{ fontSize: '56px', fontWeight: '800', color: nivelColor(entregaSeleccionada.notaFinal) }}>
-                {entregaSeleccionada.notaFinal}<span style={{ fontSize: '22px', opacity: 0.5 }}>/20</span>
-              </div>
-              <div style={{ color: nivelColor(entregaSeleccionada.notaFinal), fontWeight: '600', fontSize: '18px' }}>{entregaSeleccionada.nivelGlobal}</div>
+              {entregaSeleccionada.estado === 'evaluado' ? (
+                <>
+                  <div style={{ fontSize: '56px', fontWeight: '800', color: nivelColor(entregaSeleccionada.notaFinal) }}>
+                    {entregaSeleccionada.notaFinal}<span style={{ fontSize: '22px', opacity: 0.5 }}>/20</span>
+                  </div>
+                  <div style={{ color: nivelColor(entregaSeleccionada.notaFinal), fontWeight: '600', fontSize: '18px' }}>{entregaSeleccionada.nivelGlobal}</div>
+                </>
+              ) : (
+                <div style={{ color: '#f59e0b', fontSize: '18px' }}>⏳ Pendiente de evaluación</div>
+              )}
             </div>
 
-            {/* Badge IA detallado */}
+            {/* Badge IA */}
             {entregaSeleccionada.porcentajeIA != null && (() => {
               const iab = iaBadgeStyle(entregaSeleccionada.porcentajeIA);
               return (
                 <div style={{ background: `${iab.color}11`, border: `1px solid ${iab.color}33`, borderRadius: '12px', padding: '14px 16px', marginBottom: '16px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
-                    <span style={{ background: `${iab.color}22`, color: iab.color, border: `1px solid ${iab.color}44`, padding: '3px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: '700' }}>
-                      {iab.label}
-                    </span>
-                  </div>
+                  <span style={{ background: `${iab.color}22`, color: iab.color, border: `1px solid ${iab.color}44`, padding: '3px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: '700' }}>
+                    {iab.label}
+                  </span>
                   {entregaSeleccionada.iaObservacion && (
-                    <p style={{ color: 'rgba(255,255,255,0.6)', fontSize: '13px', margin: '0 0 8px', lineHeight: '1.5' }}>
+                    <p style={{ color: 'rgba(255,255,255,0.6)', fontSize: '13px', margin: '8px 0 0', lineHeight: '1.5' }}>
                       {entregaSeleccionada.iaObservacion}
                     </p>
-                  )}
-                  {entregaSeleccionada.iaIndicadores?.length > 0 && (
-                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                      {entregaSeleccionada.iaIndicadores.map((ind, i) => (
-                        <span key={i} style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.4)', padding: '2px 8px', borderRadius: '5px', fontSize: '11px' }}>{ind}</span>
-                      ))}
-                    </div>
                   )}
                 </div>
               );
